@@ -24,6 +24,7 @@ export default function Home() {
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isApiReady, setIsApiReady] = useState<boolean>(false);
   const [arePlayersReady, setArePlayersReady] = useState<boolean>(false);
+  const [videoKey, setVideoKey] = useState<string>(Date.now().toString());
 
   const playersRef = useRef<any[]>([]);
   const readyPlayersCount = useRef(0);
@@ -50,7 +51,12 @@ export default function Home() {
       if (!document.querySelector('script[src="https://www.youtube.com/iframe_api"]')) {
         const tag = document.createElement('script');
         tag.src = "https://www.youtube.com/iframe_api";
-        document.body.appendChild(tag);
+        const firstScriptTag = document.getElementsByTagName('script')[0];
+        if (firstScriptTag && firstScriptTag.parentNode) {
+          firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+        } else {
+          document.head.appendChild(tag);
+        }
       }
       window.onYouTubeIframeAPIReady = onApiReady;
     }
@@ -70,13 +76,17 @@ export default function Home() {
     });
   }, [toast]);
   
-  const createPlayers = useCallback(() => {
-    if (!isApiReady || !videoId) {
-      if(videoUrl && !videoId) {
-        handleUrlError();
-      }
-      return;
+  useEffect(() => {
+    if (videoUrl && !videoId) {
+      handleUrlError();
     }
+    // This key change will force the player container to re-render, 
+    // ensuring old player instances are removed from the DOM before creating new ones.
+    setVideoKey(Date.now().toString());
+  }, [videoUrl, videoId, handleUrlError, instanceCount]);
+
+  const createPlayers = useCallback(() => {
+    if (!isApiReady || !videoId) return;
 
     playersRef.current.forEach(player => {
       if (player && typeof player.destroy === 'function') {
@@ -86,21 +96,28 @@ export default function Home() {
     playersRef.current = [];
     readyPlayersCount.current = 0;
     setArePlayersReady(false);
-    setIsPlaying(false);
+    mainPlayerState.current = -1;
     
-    const onPlayerReady = (event: any) => {
-        const playerIndex = playersRef.current.findIndex(p => p && p.getIframe() === event.target.getIframe());
-        if (playerIndex > 0) {
-          event.target.mute();
-        }
+    const onPlayerReady = () => {
         readyPlayersCount.current += 1;
         if (readyPlayersCount.current === instanceCount[0]) {
             setArePlayersReady(true);
+            const mainPlayer = playersRef.current[0];
+            // Mute all but the main player
+            playersRef.current.forEach((p, index) => {
+              if (index > 0 && p && typeof p.mute === 'function') {
+                p.mute();
+              }
+            });
         }
     };
 
     const onMainPlayerStateChange = (event: any) => {
-      mainPlayerState.current = event.data;
+      const newState = event.data;
+      // If state hasn't changed, do nothing.
+      if (mainPlayerState.current === newState) return;
+
+      mainPlayerState.current = newState;
       
       const mainPlayer = playersRef.current[0];
       if (!mainPlayer || typeof mainPlayer.getCurrentTime !== 'function') return;
@@ -108,16 +125,18 @@ export default function Home() {
       const currentTime = mainPlayer.getCurrentTime();
       if (typeof currentTime !== 'number') return;
   
-      if (event.data === window.YT.PlayerState.PAUSED) {
+      if (newState === window.YT.PlayerState.PAUSED) {
         setIsPlaying(false);
         playersRef.current.forEach(p => p?.pauseVideo());
       }
       
-      if (event.data === window.YT.PlayerState.PLAYING) {
+      if (newState === window.YT.PlayerState.PLAYING) {
         setIsPlaying(true);
         playersRef.current.forEach((player, index) => {
           if(index === 0) return;
+          // Stagger the playback of the echo instances
           setTimeout(() => {
+            // Re-check the state in case it was paused while the timeout was waiting
             if (mainPlayerState.current === window.YT.PlayerState.PLAYING) {
               if (player && typeof player.seekTo === 'function' && typeof player.playVideo === 'function') {
                 player.seekTo(currentTime, true);
@@ -129,23 +148,17 @@ export default function Home() {
       }
     };
 
-    const onMainPlayerSeek = (event: any) => {
-        if (seekTimeoutRef.current) {
-            clearTimeout(seekTimeoutRef.current);
-        }
-        seekTimeoutRef.current = setTimeout(() => {
-            const currentTime = event.target.getCurrentTime();
-            playersRef.current.forEach((player, index) => {
-                if (index > 0 && player && typeof player.seekTo === 'function') {
-                   setTimeout(() => {
-                     player.seekTo(currentTime, true);
-                     if (isPlaying) {
-                       player.playVideo();
-                     }
-                   }, index * delay[0]);
-                }
-            });
-        }, 100);
+    const onMainPlayerSeek = (currentTime: number) => {
+        playersRef.current.forEach((player, index) => {
+            if (index > 0 && player && typeof player.seekTo === 'function') {
+               setTimeout(() => {
+                 player.seekTo(currentTime, true);
+                 if (isPlaying) {
+                   player.playVideo();
+                 }
+               }, index * delay[0]);
+            }
+        });
     };
     
     Array.from({ length: instanceCount[0] }).forEach((_, i) => {
@@ -162,6 +175,7 @@ export default function Home() {
               modestbranding: 1,
               rel: 0,
               disablekb: i === 0 ? 0 : 1, // Allow keyboard controls only for main player
+              origin: window.location.origin
             },
             events: {
               'onReady': onPlayerReady,
@@ -172,28 +186,34 @@ export default function Home() {
               },
             }
           });
+          
           if (i === 0) {
-            // This is a workaround to detect seek events
-            // on the main player since the API doesn't have a dedicated event for it.
-            const mainPlayer = playersRef.current[0];
-            mainPlayer.addEventListener('onStateChange', (event: any) => {
-                if(event.data === window.YT.PlayerState.BUFFERING) {
-                    const player = event.target;
-                    const currentTime = player.getCurrentTime();
-                    // A seek is likely happening if buffering occurs while not playing
-                    if(player.getPlayerState() !== window.YT.PlayerState.PLAYING && currentTime !== 0) {
-                        onMainPlayerSeek({target: player});
+            let lastTime = -1;
+            const checkSeek = setInterval(() => {
+                const player = playersRef.current[0];
+                if (player && typeof player.getPlayerState === 'function') {
+                    if (player.getPlayerState() !== window.YT.PlayerState.PLAYING && player.getPlayerState() !== window.YT.PlayerState.PAUSED) {
+                        return;
                     }
+                    const currentTime = player.getCurrentTime();
+                    if (lastTime !== -1 && Math.abs(currentTime - lastTime) > 1.5) {
+                        onMainPlayerSeek(currentTime);
+                    }
+                    lastTime = currentTime;
+                } else {
+                    clearInterval(checkSeek);
                 }
-            });
-        }
+            }, 500);
+          }
         }
       });
-  }, [isApiReady, videoId, instanceCount, videoUrl, handleUrlError, delay, isPlaying]);
+  }, [isApiReady, videoId, instanceCount, delay, isPlaying]);
 
   useEffect(() => {
+    // Re-create players when key changes (which happens when url/count changes)
     createPlayers();
     
+    // Cleanup on component unmount
     return () => {
       playersRef.current.forEach(player => {
         if (player && typeof player.destroy === 'function') {
@@ -201,7 +221,7 @@ export default function Home() {
         }
       });
     };
-  }, [createPlayers]);
+  }, [videoKey, isApiReady]); // Rerun when the key changes or API becomes ready
 
   const handlePlayPause = () => {
     if (!arePlayersReady) return;
@@ -268,9 +288,7 @@ export default function Home() {
                 max={9}
                 step={1}
                 value={instanceCount}
-                onValueChange={(value) => {
-                  setInstanceCount(value);
-                }}
+                onValueChange={setInstanceCount}
               />
             </div>
 
@@ -290,7 +308,7 @@ export default function Home() {
             </div>
           </div>
 
-          <div className={cn(
+          <div key={videoKey} className={cn(
             "relative w-full rounded-lg overflow-hidden bg-black/50 transition-all duration-500 ease-in-out border-2 border-transparent",
             videoId ? 'h-auto border-primary/20' : 'h-0 py-0 border-0 scale-95 opacity-0'
           )}>
@@ -298,7 +316,7 @@ export default function Home() {
               {Array.from({ length: instanceCount[0] }).map((_, i) => (
                 <div key={i} className="aspect-video relative group/player">
                    <div id={`player-container-${i}`} className="w-full h-full"></div>
-                   {i > 0 && <div className="absolute inset-0 bg-black/50 group-hover/player:bg-black/20 transition-colors"></div>}
+                   {i > 0 && <div className="absolute inset-0 bg-black/50 group-hover/player:bg-black/20 transition-colors pointer-events-none"></div>}
                 </div>
               ))}
             </div>
@@ -308,7 +326,7 @@ export default function Home() {
                </div>
             )}
              {(!arePlayersReady && videoId) && (
-                 <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-white">
+                 <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-white z-10">
                     <p>Loading players...</p>
                  </div>
             )}
@@ -329,5 +347,3 @@ export default function Home() {
     </main>
   );
 }
-
-    
