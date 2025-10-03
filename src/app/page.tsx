@@ -72,6 +72,9 @@ export default function Home() {
   
   const createPlayers = useCallback(() => {
     if (!isApiReady || !videoId) {
+      if(videoUrl && !videoId) {
+        handleUrlError();
+      }
       return;
     }
 
@@ -84,11 +87,6 @@ export default function Home() {
     readyPlayersCount.current = 0;
     setArePlayersReady(false);
     setIsPlaying(false);
-
-    if (videoUrl && !videoId) {
-      handleUrlError();
-      return;
-    }
     
     const onPlayerReady = (event: any) => {
         const playerIndex = playersRef.current.findIndex(p => p && p.getIframe() === event.target.getIframe());
@@ -170,13 +168,25 @@ export default function Home() {
               'onStateChange': (event: any) => {
                 if (i === 0) {
                   onMainPlayerStateChange(event);
-                  if (event.data === window.YT.PlayerState.BUFFERING) {
-                     onMainPlayerSeek(event);
-                  }
                 }
               },
             }
           });
+          if (i === 0) {
+            // This is a workaround to detect seek events
+            // on the main player since the API doesn't have a dedicated event for it.
+            const mainPlayer = playersRef.current[0];
+            mainPlayer.addEventListener('onStateChange', (event: any) => {
+                if(event.data === window.YT.PlayerState.BUFFERING) {
+                    const player = event.target;
+                    const currentTime = player.getCurrentTime();
+                    // A seek is likely happening if buffering occurs while not playing
+                    if(player.getPlayerState() !== window.YT.PlayerState.PLAYING && currentTime !== 0) {
+                        onMainPlayerSeek({target: player});
+                    }
+                }
+            });
+        }
         }
       });
   }, [isApiReady, videoId, instanceCount, videoUrl, handleUrlError, delay, isPlaying]);
@@ -297,6 +307,11 @@ export default function Home() {
                   <p>Enter a valid YouTube URL to begin</p>
                </div>
             )}
+             {(!arePlayersReady && videoId) && (
+                 <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-white">
+                    <p>Loading players...</p>
+                 </div>
+            )}
           </div>
         </CardContent>
         <CardFooter className="flex justify-center p-8">
@@ -314,3 +329,5 @@ export default function Home() {
     </main>
   );
 }
+
+    
