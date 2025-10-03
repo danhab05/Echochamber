@@ -90,7 +90,11 @@ export default function Home() {
       return;
     }
     
-    const onPlayerReady = () => {
+    const onPlayerReady = (event: any) => {
+        const playerIndex = playersRef.current.findIndex(p => p && p.getIframe() === event.target.getIframe());
+        if (playerIndex > 0) {
+          event.target.mute();
+        }
         readyPlayersCount.current += 1;
         if (readyPlayersCount.current === instanceCount[0]) {
             setArePlayersReady(true);
@@ -117,9 +121,7 @@ export default function Home() {
           if(index === 0) return;
           setTimeout(() => {
             if (mainPlayerState.current === window.YT.PlayerState.PLAYING) {
-              // Ensure other players are muted and seeked correctly before playing
               if (player && typeof player.seekTo === 'function' && typeof player.playVideo === 'function') {
-                player.mute();
                 player.seekTo(currentTime, true);
                 player.playVideo();
               }
@@ -152,8 +154,8 @@ export default function Home() {
         const container = document.getElementById(`player-container-${i}`);
         if (container) {
           playersRef.current[i] = new window.YT.Player(container, {
-            height: i === 0 ? '100%' : '0',
-            width: i === 0 ? '100%' : '0',
+            height: '100%',
+            width: '100%',
             videoId: videoId,
             playerVars: {
               playsinline: 1,
@@ -168,8 +170,6 @@ export default function Home() {
               'onStateChange': (event: any) => {
                 if (i === 0) {
                   onMainPlayerStateChange(event);
-                  // A bit of a hack to detect seeks. The YT API doesn't have a dedicated seek event.
-                  // We listen for buffering state which often happens during a seek.
                   if (event.data === window.YT.PlayerState.BUFFERING) {
                      onMainPlayerSeek(event);
                   }
@@ -203,22 +203,24 @@ export default function Home() {
   
     if (playerState === window.YT.PlayerState.PLAYING) {
       mainPlayer.pauseVideo();
-      setIsPlaying(false);
     } else {
-      // If paused or ended, seek to beginning and play
-      if (playerState === window.YT.PlayerState.PAUSED || playerState === window.YT.PlayerState.ENDED) {
-         playersRef.current.forEach(p => p.seekTo(0, true));
-      }
       mainPlayer.playVideo();
-      setIsPlaying(true);
     }
   };
   
+  const gridCols = useMemo(() => {
+    const count = instanceCount[0];
+    if (count <= 1) return 'grid-cols-1';
+    if (count <= 4) return 'grid-cols-2';
+    if (count <= 9) return 'grid-cols-3';
+    return 'grid-cols-3'; // Max
+  }, [instanceCount]);
+
 
   return (
     <main className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground p-4 sm:p-6 md:p-8 overflow-hidden">
       <div className="absolute inset-0 -z-10 h-full w-full bg-background bg-[radial-gradient(hsl(var(--primary)/0.15)_1px,transparent_1px)] [background-size:16px_16px]"></div>
-      <Card className="w-full max-w-2xl bg-card/80 backdrop-blur-xl border-primary/20 shadow-2xl shadow-primary/10 transition-all animate-in fade-in duration-500">
+      <Card className="w-full max-w-4xl bg-card/80 backdrop-blur-xl border-primary/20 shadow-2xl shadow-primary/10 transition-all animate-in fade-in duration-500">
         <CardHeader className="text-center p-8">
           <div className="flex justify-center items-center gap-3 mb-2">
              <Music4 className="w-10 h-10 text-primary text-glow-primary" />
@@ -253,12 +255,11 @@ export default function Home() {
               <Slider
                 id="instances"
                 min={1}
-                max={10}
+                max={9}
                 step={1}
                 value={instanceCount}
                 onValueChange={(value) => {
                   setInstanceCount(value);
-                  createPlayers();
                 }}
               />
             </div>
@@ -279,15 +280,23 @@ export default function Home() {
             </div>
           </div>
 
-          <div className={cn("relative aspect-video w-full rounded-lg overflow-hidden bg-black transition-all duration-500 ease-in-out border-2 border-transparent", videoId ? 'h-auto border-primary/20' : 'h-0 py-0 border-0 scale-95 opacity-0')}>
-              {Array.from({ length: 10 }).map((_, i) => (
-                <div key={i} id={`player-container-${i}`} className={cn(i === 0 ? 'w-full h-full' : 'w-0 h-0 absolute')}></div>
+          <div className={cn(
+            "relative w-full rounded-lg overflow-hidden bg-black/50 transition-all duration-500 ease-in-out border-2 border-transparent",
+            videoId ? 'h-auto border-primary/20' : 'h-0 py-0 border-0 scale-95 opacity-0'
+          )}>
+            <div className={cn("grid gap-1", gridCols)}>
+              {Array.from({ length: instanceCount[0] }).map((_, i) => (
+                <div key={i} className="aspect-video relative group/player">
+                   <div id={`player-container-${i}`} className="w-full h-full"></div>
+                   {i > 0 && <div className="absolute inset-0 bg-black/50 group-hover/player:bg-black/20 transition-colors"></div>}
+                </div>
               ))}
-              {!videoId && (
-                 <div className="absolute inset-0 flex items-center justify-center text-muted-foreground">
-                    <p>Enter a valid YouTube URL to begin</p>
-                 </div>
-              )}
+            </div>
+            {!videoId && (
+               <div className="absolute inset-0 flex items-center justify-center text-muted-foreground">
+                  <p>Enter a valid YouTube URL to begin</p>
+               </div>
+            )}
           </div>
         </CardContent>
         <CardFooter className="flex justify-center p-8">
