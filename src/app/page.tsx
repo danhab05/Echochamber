@@ -29,7 +29,6 @@ export default function Home() {
   const playersRef = useRef<any[]>([]);
   const readyPlayersCount = useRef(0);
   const mainPlayerState = useRef<number>(-1);
-  const seekTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const { toast } = useToast();
 
@@ -67,7 +66,7 @@ export default function Home() {
       }
     };
   }, []);
-
+  
   const handleUrlError = useCallback(() => {
     toast({
       variant: "destructive",
@@ -75,48 +74,54 @@ export default function Home() {
       description: "Please paste a valid YouTube video URL.",
     });
   }, [toast]);
-  
-  useEffect(() => {
-    if (videoUrl && !videoId) {
-      handleUrlError();
-    }
-    // This key change will force the player container to re-render, 
-    // ensuring old player instances are removed from the DOM before creating new ones.
-    setVideoKey(Date.now().toString());
-  }, [videoUrl, videoId, handleUrlError, instanceCount]);
 
-  const createPlayers = useCallback(() => {
-    if (!isApiReady || !videoId) return;
-
+  const resetState = useCallback(() => {
+    setIsPlaying(false);
+    setArePlayersReady(false);
+    readyPlayersCount.current = 0;
+    mainPlayerState.current = -1;
     playersRef.current.forEach(player => {
       if (player && typeof player.destroy === 'function') {
         player.destroy();
       }
     });
     playersRef.current = [];
-    readyPlayersCount.current = 0;
-    setArePlayersReady(false);
-    mainPlayerState.current = -1;
-    
-    const onPlayerReady = () => {
+    setVideoKey(Date.now().toString());
+  }, []);
+
+  useEffect(() => {
+    if (videoUrl && !videoId) {
+      handleUrlError();
+    }
+    resetState();
+  }, [videoUrl, videoId, handleUrlError, instanceCount, resetState]);
+
+
+  const createPlayers = useCallback(() => {
+    if (!isApiReady || !videoId) return;
+
+    const onPlayerReady = (event: any) => {
+        const playerIndex = playersRef.current.findIndex(p => p && p.getIframe && event.target.getIframe && p.getIframe().id === event.target.getIframe().id);
+        
         readyPlayersCount.current += 1;
+
+        if (playerIndex === 0) {
+          event.target.unMute();
+          event.target.setVolume(100);
+        } else if (playerIndex > 0) {
+          event.target.unMute();
+          const volume = Math.max(0, 100 - (playerIndex * 25));
+          event.target.setVolume(volume);
+        }
+
         if (readyPlayersCount.current === instanceCount[0]) {
             setArePlayersReady(true);
-            const mainPlayer = playersRef.current[0];
-            // Mute all but the main player
-            playersRef.current.forEach((p, index) => {
-              if (index > 0 && p && typeof p.mute === 'function') {
-                p.mute();
-              }
-            });
         }
     };
-
+    
     const onMainPlayerStateChange = (event: any) => {
       const newState = event.data;
-      // If state hasn't changed, do nothing.
       if (mainPlayerState.current === newState) return;
-
       mainPlayerState.current = newState;
       
       const mainPlayer = playersRef.current[0];
@@ -125,18 +130,11 @@ export default function Home() {
       const currentTime = mainPlayer.getCurrentTime();
       if (typeof currentTime !== 'number') return;
   
-      if (newState === window.YT.PlayerState.PAUSED) {
-        setIsPlaying(false);
-        playersRef.current.forEach(p => p?.pauseVideo());
-      }
-      
       if (newState === window.YT.PlayerState.PLAYING) {
         setIsPlaying(true);
         playersRef.current.forEach((player, index) => {
-          if(index === 0) return;
-          // Stagger the playback of the echo instances
+          if (index === 0) return;
           setTimeout(() => {
-            // Re-check the state in case it was paused while the timeout was waiting
             if (mainPlayerState.current === window.YT.PlayerState.PLAYING) {
               if (player && typeof player.seekTo === 'function' && typeof player.playVideo === 'function') {
                 player.seekTo(currentTime, true);
@@ -145,57 +143,57 @@ export default function Home() {
             }
           }, index * delay[0]);
         });
+      } else if (newState === window.YT.PlayerState.PAUSED || newState === window.YT.PlayerState.ENDED) {
+        setIsPlaying(false);
+        playersRef.current.forEach(p => p?.pauseVideo());
       }
     };
-
+    
     const onMainPlayerSeek = (currentTime: number) => {
-        playersRef.current.forEach((player, index) => {
-            if (index > 0 && player && typeof player.seekTo === 'function') {
-               setTimeout(() => {
-                 player.seekTo(currentTime, true);
-                 if (isPlaying) {
-                   player.playVideo();
-                 }
-               }, index * delay[0]);
-            }
-        });
+      playersRef.current.forEach((player, index) => {
+          if (player && typeof player.seekTo === 'function') {
+             setTimeout(() => {
+               player.seekTo(currentTime, true);
+               if (isPlaying) {
+                 player.playVideo();
+               }
+             }, index * delay[0]);
+          }
+      });
     };
     
-    Array.from({ length: instanceCount[0] }).forEach((_, i) => {
-        const container = document.getElementById(`player-container-${i}`);
-        if (container) {
-          playersRef.current[i] = new window.YT.Player(container, {
-            height: '100%',
-            width: '100%',
-            videoId: videoId,
-            playerVars: {
-              playsinline: 1,
-              controls: i === 0 ? 1 : 0,
-              autoplay: 0,
-              modestbranding: 1,
-              rel: 0,
-              disablekb: i === 0 ? 0 : 1, // Allow keyboard controls only for main player
-              origin: window.location.origin
-            },
-            events: {
-              'onReady': onPlayerReady,
-              'onStateChange': (event: any) => {
-                if (i === 0) {
-                  onMainPlayerStateChange(event);
-                }
-              },
-            }
-          });
-          
-          if (i === 0) {
+    playersRef.current = Array.from({ length: instanceCount[0] }).map((_, i) => {
+      const container = document.getElementById(`player-container-${i}`);
+      if (container) {
+        const player = new window.YT.Player(container, {
+          height: '100%',
+          width: '100%',
+          videoId: videoId,
+          playerVars: {
+            playsinline: 1,
+            controls: i === 0 ? 1 : 0,
+            autoplay: 0,
+            modestbranding: 1,
+            rel: 0,
+            disablekb: i === 0 ? 0 : 1,
+            origin: window.location.origin
+          },
+          events: {
+            'onReady': onPlayerReady,
+            'onStateChange': i === 0 ? onMainPlayerStateChange : undefined,
+          }
+        });
+
+        if (i === 0) {
             let lastTime = -1;
             const checkSeek = setInterval(() => {
-                const player = playersRef.current[0];
-                if (player && typeof player.getPlayerState === 'function') {
-                    if (player.getPlayerState() !== window.YT.PlayerState.PLAYING && player.getPlayerState() !== window.YT.PlayerState.PAUSED) {
+                const p = playersRef.current[0];
+                if (p && typeof p.getPlayerState === 'function') {
+                    const playerState = p.getPlayerState();
+                    if (playerState !== window.YT.PlayerState.PLAYING && playerState !== window.YT.PlayerState.PAUSED) {
                         return;
                     }
-                    const currentTime = player.getCurrentTime();
+                    const currentTime = p.getCurrentTime();
                     if (lastTime !== -1 && Math.abs(currentTime - lastTime) > 1.5) {
                         onMainPlayerSeek(currentTime);
                     }
@@ -205,29 +203,32 @@ export default function Home() {
                 }
             }, 500);
           }
-        }
-      });
+        return player;
+      }
+      return null;
+    }).filter(p => p !== null);
+
   }, [isApiReady, videoId, instanceCount, delay, isPlaying]);
 
   useEffect(() => {
-    // Re-create players when key changes (which happens when url/count changes)
-    createPlayers();
-    
-    // Cleanup on component unmount
+    if(isApiReady && videoId) {
+      createPlayers();
+    }
     return () => {
+      // This is a failsafe cleanup
       playersRef.current.forEach(player => {
         if (player && typeof player.destroy === 'function') {
           player.destroy();
         }
       });
     };
-  }, [videoKey, isApiReady]); // Rerun when the key changes or API becomes ready
+  }, [videoKey, isApiReady, videoId, createPlayers]);
 
   const handlePlayPause = () => {
     if (!arePlayersReady) return;
   
     const mainPlayer = playersRef.current[0];
-    if (!mainPlayer) return;
+    if (!mainPlayer || typeof mainPlayer.getPlayerState !== 'function') return;
 
     const playerState = mainPlayer.getPlayerState();
   
