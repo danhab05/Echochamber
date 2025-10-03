@@ -18,7 +18,7 @@ declare global {
 }
 
 export default function Home() {
-  const [videoUrl, setVideoUrl] = useState<string>('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+  const [videoUrl, setVideoUrl] = useState<string>('https://www.youtube.com/watch?v=2zNSgSzhBfM');
   const [instanceCount, setInstanceCount] = useState<number[]>([3]);
   const [delay, setDelay] = useState<number[]>([120]);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
@@ -47,12 +47,12 @@ export default function Home() {
     if (window.YT && window.YT.Player) {
       onApiReady();
     } else {
-      window.onYouTubeIframeAPIReady = onApiReady;
       if (!document.querySelector('script[src="https://www.youtube.com/iframe_api"]')) {
         const tag = document.createElement('script');
         tag.src = "https://www.youtube.com/iframe_api";
         document.body.appendChild(tag);
       }
+      window.onYouTubeIframeAPIReady = onApiReady;
     }
 
     return () => {
@@ -98,11 +98,12 @@ export default function Home() {
     };
 
     const onMainPlayerStateChange = (event: any) => {
-      // event.data is the player state
-      // -1 (unstarted), 0 (ended), 1 (playing), 2 (paused), 3 (buffering), 5 (video cued)
       mainPlayerState.current = event.data;
       
-      const currentTime = playersRef.current[0]?.getCurrentTime();
+      const mainPlayer = playersRef.current[0];
+      if (!mainPlayer || typeof mainPlayer.getCurrentTime !== 'function') return;
+
+      const currentTime = mainPlayer.getCurrentTime();
       if (typeof currentTime !== 'number') return;
   
       if (event.data === window.YT.PlayerState.PAUSED) {
@@ -115,13 +116,36 @@ export default function Home() {
         playersRef.current.forEach((player, index) => {
           if(index === 0) return;
           setTimeout(() => {
-              if (mainPlayerState.current === window.YT.PlayerState.PLAYING) {
-                  player.seekTo(currentTime, true);
-                  player.playVideo();
+            if (mainPlayerState.current === window.YT.PlayerState.PLAYING) {
+              // Ensure other players are muted and seeked correctly before playing
+              if (player && typeof player.seekTo === 'function' && typeof player.playVideo === 'function') {
+                player.mute();
+                player.seekTo(currentTime, true);
+                player.playVideo();
               }
+            }
           }, index * delay[0]);
         });
       }
+    };
+
+    const onMainPlayerSeek = (event: any) => {
+        if (seekTimeoutRef.current) {
+            clearTimeout(seekTimeoutRef.current);
+        }
+        seekTimeoutRef.current = setTimeout(() => {
+            const currentTime = event.target.getCurrentTime();
+            playersRef.current.forEach((player, index) => {
+                if (index > 0 && player && typeof player.seekTo === 'function') {
+                   setTimeout(() => {
+                     player.seekTo(currentTime, true);
+                     if (isPlaying) {
+                       player.playVideo();
+                     }
+                   }, index * delay[0]);
+                }
+            });
+        }, 100);
     };
     
     Array.from({ length: instanceCount[0] }).forEach((_, i) => {
@@ -137,16 +161,25 @@ export default function Home() {
               autoplay: 0,
               modestbranding: 1,
               rel: 0,
-              disablekb: 1,
+              disablekb: i === 0 ? 0 : 1, // Allow keyboard controls only for main player
             },
             events: {
               'onReady': onPlayerReady,
-              'onStateChange': i === 0 ? onMainPlayerStateChange : undefined,
+              'onStateChange': (event: any) => {
+                if (i === 0) {
+                  onMainPlayerStateChange(event);
+                  // A bit of a hack to detect seeks. The YT API doesn't have a dedicated seek event.
+                  // We listen for buffering state which often happens during a seek.
+                  if (event.data === window.YT.PlayerState.BUFFERING) {
+                     onMainPlayerSeek(event);
+                  }
+                }
+              },
             }
           });
         }
       });
-  }, [isApiReady, videoId, instanceCount, videoUrl, handleUrlError, delay]);
+  }, [isApiReady, videoId, instanceCount, videoUrl, handleUrlError, delay, isPlaying]);
 
   useEffect(() => {
     createPlayers();
@@ -165,13 +198,20 @@ export default function Home() {
   
     const mainPlayer = playersRef.current[0];
     if (!mainPlayer) return;
+
+    const playerState = mainPlayer.getPlayerState();
   
-    if (isPlaying) {
+    if (playerState === window.YT.PlayerState.PLAYING) {
       mainPlayer.pauseVideo();
+      setIsPlaying(false);
     } else {
+      // If paused or ended, seek to beginning and play
+      if (playerState === window.YT.PlayerState.PAUSED || playerState === window.YT.PlayerState.ENDED) {
+         playersRef.current.forEach(p => p.seekTo(0, true));
+      }
       mainPlayer.playVideo();
+      setIsPlaying(true);
     }
-    setIsPlaying(!isPlaying);
   };
   
 
@@ -218,6 +258,7 @@ export default function Home() {
                 value={instanceCount}
                 onValueChange={(value) => {
                   setInstanceCount(value);
+                  createPlayers();
                 }}
               />
             </div>
@@ -263,5 +304,4 @@ export default function Home() {
       </Card>
     </main>
   );
-
-    
+}
