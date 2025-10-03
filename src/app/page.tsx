@@ -101,17 +101,12 @@ export default function Home() {
     } else {
       resetState(instanceCount[0]);
     }
-  }, [videoUrl, handleUrlError, instanceCount[0]]);
+  }, [videoUrl, handleUrlError, instanceCount, resetState]);
 
   const createPlayers = useCallback(() => {
     if (!isApiReady || !videoId) return;
-
-    readyPlayersCount.current = 0;
-    setArePlayersReady(false);
     
     const onPlayerReady = (event: any, playerIndex: number) => {
-        readyPlayersCount.current += 1;
-
         const p = event.target;
         p.unMute();
         
@@ -121,8 +116,9 @@ export default function Home() {
           const echoVolume = Math.max(0, volume[0] - (playerIndex * 25));
           p.setVolume(echoVolume);
         }
-
-        if (readyPlayersCount.current === instanceCount[0]) {
+        
+        // Make the app playable as soon as the main player is ready.
+        if (playerIndex === 0) {
             setArePlayersReady(true);
         }
     };
@@ -141,8 +137,8 @@ export default function Home() {
       if (newState === window.YT.PlayerState.PLAYING) {
         setIsPlaying(true);
         playersRef.current.forEach((player, index) => {
-          if (index === 0) return;
-          if (player && typeof player.seekTo === 'function' && typeof player.playVideo === 'function') {
+          if (index === 0 || !player) return;
+          if (typeof player.seekTo === 'function' && typeof player.playVideo === 'function') {
             const playWithDelay = () => {
               if (playersRef.current[0]?.getPlayerState() === window.YT.PlayerState.PLAYING) {
                   player.seekTo(currentTime, true);
@@ -184,6 +180,7 @@ export default function Home() {
       const container = document.getElementById(containerId);
       
       if (container) {
+        // Ensure container is empty before creating a new player
         while (container.firstChild) {
             container.removeChild(container.firstChild);
         }
@@ -244,7 +241,7 @@ export default function Home() {
   }, [videoKey, isApiReady, videoId, createPlayers]);
 
   useEffect(() => {
-    if (!arePlayersReady) return;
+    if (!playersRef.current.length) return;
     playersRef.current.forEach((player, index) => {
       if (player && typeof player.setVolume === 'function') {
         if (index === 0) {
@@ -255,7 +252,7 @@ export default function Home() {
         }
       }
     });
-  }, [volume, arePlayersReady]);
+  }, [volume]);
 
   const handlePlayPause = () => {
     if (!arePlayersReady) return;
@@ -376,6 +373,11 @@ export default function Home() {
                   <p>Enter a valid YouTube URL to begin</p>
                </div>
             )}
+            {!arePlayersReady && videoId && (
+               <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-white">
+                  <p>Loading players...</p>
+               </div>
+            )}
           </div>
         </CardContent>
         <CardFooter className="flex justify-center p-8">
@@ -393,5 +395,3 @@ export default function Home() {
     </main>
   );
 }
-
-    
