@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
-import { Youtube, Layers, Play, Pause, Music4, Timer } from 'lucide-react';
+import { Youtube, Layers, Play, Pause, Music4, Timer, Volume2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useToast } from "@/hooks/use-toast";
 
@@ -21,6 +21,7 @@ export default function Home() {
   const [videoUrl, setVideoUrl] = useState<string>('https://www.youtube.com/watch?v=2zNSgSzhBfM');
   const [instanceCount, setInstanceCount] = useState<number[]>([3]);
   const [delay, setDelay] = useState<number[]>([120]);
+  const [volume, setVolume] = useState<number[]>([100]);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isApiReady, setIsApiReady] = useState<boolean>(false);
   const [arePlayersReady, setArePlayersReady] = useState<boolean>(false);
@@ -76,7 +77,7 @@ export default function Home() {
     });
   }, [toast]);
 
-  const resetState = useCallback(() => {
+  const resetState = useCallback((newInstanceCount: number) => {
     setIsPlaying(false);
     setArePlayersReady(false);
     readyPlayersCount.current = 0;
@@ -90,22 +91,28 @@ export default function Home() {
         player.destroy();
       }
     });
-    playersRef.current = [];
+    playersRef.current = new Array(newInstanceCount);
     setVideoKey(Date.now().toString());
   }, []);
-
+  
   useEffect(() => {
     if (videoUrl && !videoId) {
       handleUrlError();
     }
-    resetState();
-  }, [videoUrl, handleUrlError, instanceCount, resetState]);
+    // Only reset if videoUrl or instanceCount changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [videoUrl, videoId, handleUrlError]);
+
+  useEffect(() => {
+    resetState(instanceCount[0]);
+  }, [instanceCount, resetState]);
 
 
   const createPlayers = useCallback(() => {
-    if (!isApiReady || !videoId || playersRef.current.length > 0) return;
+    if (!isApiReady || !videoId) return;
 
     readyPlayersCount.current = 0;
+    setArePlayersReady(false);
     
     const onPlayerReady = (event: any) => {
         const playerIndex = playersRef.current.findIndex(p => p && p.getIframe && event.target.getIframe && p.getIframe().id === event.target.getIframe().id);
@@ -114,11 +121,11 @@ export default function Home() {
 
         if (playerIndex === 0) {
           event.target.unMute();
-          event.target.setVolume(100);
+          event.target.setVolume(volume[0]);
         } else if (playerIndex > 0) {
           event.target.unMute();
-          const volume = Math.max(0, 100 - (playerIndex * 25));
-          event.target.setVolume(volume);
+          const echoVolume = Math.max(0, volume[0] - (playerIndex * 25));
+          event.target.setVolume(echoVolume);
         }
 
         if (readyPlayersCount.current === instanceCount[0]) {
@@ -142,12 +149,13 @@ export default function Home() {
         playersRef.current.forEach((player, index) => {
           if (index === 0) return;
           if (player && typeof player.seekTo === 'function' && typeof player.playVideo === 'function') {
+            const playWithDelay = () => {
+              if (playersRef.current[0]?.getPlayerState() === window.YT.PlayerState.PLAYING) {
+                  player.playVideo();
+              }
+            };
             player.seekTo(currentTime, true);
-            setTimeout(() => {
-                if (playersRef.current[0]?.getPlayerState() === window.YT.PlayerState.PLAYING) {
-                    player.playVideo();
-                }
-            }, index * delay[0]);
+            setTimeout(playWithDelay, index * delay[0]);
           }
         });
       } else if (newState === window.YT.PlayerState.PAUSED || newState === window.YT.PlayerState.ENDED) {
@@ -160,13 +168,15 @@ export default function Home() {
       const mainPlayerPlaying = playersRef.current[0]?.getPlayerState() === window.YT.PlayerState.PLAYING;
       playersRef.current.forEach((player, index) => {
           if (player && typeof player.seekTo === 'function') {
+            const playWithDelay = () => {
+                if (playersRef.current[0]?.getPlayerState() === window.YT.PlayerState.PLAYING) {
+                  player.playVideo();
+                }
+              };
+
             player.seekTo(currentTime, true);
             if (mainPlayerPlaying) {
-               setTimeout(() => {
-                 if (playersRef.current[0]?.getPlayerState() === window.YT.PlayerState.PLAYING) {
-                   player.playVideo();
-                 }
-               }, index * delay[0]);
+               setTimeout(playWithDelay, index * delay[0]);
             } else {
               player.pauseVideo();
             }
@@ -179,7 +189,10 @@ export default function Home() {
       const container = document.getElementById(containerId);
       
       if (container) {
-        container.innerHTML = '';
+        // Ensure container is empty before creating new player
+        if (container.firstChild) {
+            return playersRef.current[i] || null;
+        }
         
         const player = new window.YT.Player(containerId, {
           height: '100%',
@@ -223,7 +236,7 @@ export default function Home() {
       return null;
     }).filter(p => p !== null);
 
-  }, [isApiReady, videoId, instanceCount, delay]);
+  }, [isApiReady, videoId, instanceCount, delay, volume]);
 
   useEffect(() => {
     if(isApiReady && videoId) {
@@ -235,6 +248,20 @@ export default function Home() {
       }
     };
   }, [videoKey, isApiReady, videoId, createPlayers]);
+
+  useEffect(() => {
+    if (!arePlayersReady) return;
+    playersRef.current.forEach((player, index) => {
+      if (player && typeof player.setVolume === 'function') {
+        if (index === 0) {
+          player.setVolume(volume[0]);
+        } else {
+          const echoVolume = Math.max(0, volume[0] - (index * 25));
+          player.setVolume(echoVolume);
+        }
+      }
+    });
+  }, [volume, arePlayersReady]);
 
   const handlePlayPause = () => {
     if (!arePlayersReady) return;
@@ -263,7 +290,7 @@ export default function Home() {
   return (
     <main className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground p-4 sm:p-6 md:p-8 overflow-hidden">
       <div className="absolute inset-0 -z-10 h-full w-full bg-background bg-[radial-gradient(hsl(var(--primary)/0.15)_1px,transparent_1px)] [background-size:16px_16px]"></div>
-      <Card className="w-full max-w-4xl bg-card/80 backdrop-blur-xl border-primary/20 shadow-2xl shadow-primary/10 transition-all animate-in fade-in duration-500">
+      <Card className="w-full max-w-5xl bg-card/80 backdrop-blur-xl border-primary/20 shadow-2xl shadow-primary/10 transition-all animate-in fade-in duration-500">
         <CardHeader className="text-center p-8">
           <div className="flex justify-center items-center gap-3 mb-2">
              <Music4 className="w-10 h-10 text-primary text-glow-primary" />
@@ -289,7 +316,7 @@ export default function Home() {
             />
           </div>
           
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="space-y-4">
               <label htmlFor="instances" className="text-sm font-medium flex items-center gap-2 text-accent">
                 <Layers className="w-5 h-5" />
@@ -317,6 +344,21 @@ export default function Home() {
                 step={10}
                 value={delay}
                 onValueChange={setDelay}
+              />
+            </div>
+
+            <div className="space-y-4">
+              <label htmlFor="volume" className="text-sm font-medium flex items-center gap-2 text-accent">
+                <Volume2 className="w-5 h-5" />
+                Master Volume: <span className="font-bold text-primary text-lg">{volume[0]}%</span>
+              </label>
+              <Slider
+                id="volume"
+                min={0}
+                max={100}
+                step={1}
+                value={volume}
+                onValueChange={setVolume}
               />
             </div>
           </div>
@@ -360,5 +402,3 @@ export default function Home() {
     </main>
   );
 }
-
-    
