@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
@@ -5,7 +6,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
-import { Youtube, Layers, Play, Pause, Music4 } from 'lucide-react';
+import { Youtube, Layers, Play, Pause, Music4, Timer } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useToast } from "@/hooks/use-toast";
 
@@ -19,12 +20,16 @@ declare global {
 export default function Home() {
   const [videoUrl, setVideoUrl] = useState<string>('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
   const [instanceCount, setInstanceCount] = useState<number[]>([3]);
+  const [delay, setDelay] = useState<number[]>([120]);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isApiReady, setIsApiReady] = useState<boolean>(false);
   const [arePlayersReady, setArePlayersReady] = useState<boolean>(false);
 
   const playersRef = useRef<any[]>([]);
   const readyPlayersCount = useRef(0);
+  const mainPlayerState = useRef<number>(-1);
+  const seekTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
   const { toast } = useToast();
 
   const videoId = useMemo(() => {
@@ -51,7 +56,6 @@ export default function Home() {
     }
 
     return () => {
-      // Clean up the global callback
       if (window.onYouTubeIframeAPIReady === onApiReady) {
         delete window.onYouTubeIframeAPIReady;
       }
@@ -71,7 +75,6 @@ export default function Home() {
       return;
     }
 
-    // Destroy existing players
     playersRef.current.forEach(player => {
       if (player && typeof player.destroy === 'function') {
         player.destroy();
@@ -87,11 +90,38 @@ export default function Home() {
       return;
     }
     
-    const onPlayerReady = (event: any) => {
+    const onPlayerReady = () => {
         readyPlayersCount.current += 1;
         if (readyPlayersCount.current === instanceCount[0]) {
             setArePlayersReady(true);
         }
+    };
+
+    const onMainPlayerStateChange = (event: any) => {
+      // event.data is the player state
+      // -1 (unstarted), 0 (ended), 1 (playing), 2 (paused), 3 (buffering), 5 (video cued)
+      mainPlayerState.current = event.data;
+      
+      const currentTime = playersRef.current[0]?.getCurrentTime();
+      if (typeof currentTime !== 'number') return;
+  
+      if (event.data === window.YT.PlayerState.PAUSED) {
+        setIsPlaying(false);
+        playersRef.current.forEach(p => p?.pauseVideo());
+      }
+      
+      if (event.data === window.YT.PlayerState.PLAYING) {
+        setIsPlaying(true);
+        playersRef.current.forEach((player, index) => {
+          if(index === 0) return;
+          setTimeout(() => {
+              if (mainPlayerState.current === window.YT.PlayerState.PLAYING) {
+                  player.seekTo(currentTime, true);
+                  player.playVideo();
+              }
+          }, index * delay[0]);
+        });
+      }
     };
     
     Array.from({ length: instanceCount[0] }).forEach((_, i) => {
@@ -111,16 +141,16 @@ export default function Home() {
             },
             events: {
               'onReady': onPlayerReady,
+              'onStateChange': i === 0 ? onMainPlayerStateChange : undefined,
             }
           });
         }
       });
-  }, [isApiReady, videoId, instanceCount, handleUrlError]);
+  }, [isApiReady, videoId, instanceCount, videoUrl, handleUrlError, delay]);
 
   useEffect(() => {
     createPlayers();
     
-    // Cleanup function
     return () => {
       playersRef.current.forEach(player => {
         if (player && typeof player.destroy === 'function') {
@@ -130,26 +160,20 @@ export default function Home() {
     };
   }, [createPlayers]);
 
-
   const handlePlayPause = () => {
     if (!arePlayersReady) return;
-
-    const nextIsPlaying = !isPlaying;
-    setIsPlaying(nextIsPlaying);
-
-    playersRef.current.forEach((player, index) => {
-      if (player && typeof player.playVideo === 'function' && typeof player.pauseVideo === 'function') {
-        if (nextIsPlaying) {
-          setTimeout(() => {
-            player.seekTo(0);
-            player.playVideo();
-          }, index * 120); // 120ms echo delay
-        } else {
-          player.pauseVideo();
-        }
-      }
-    });
+  
+    const mainPlayer = playersRef.current[0];
+    if (!mainPlayer) return;
+  
+    if (isPlaying) {
+      mainPlayer.pauseVideo();
+    } else {
+      mainPlayer.playVideo();
+    }
+    setIsPlaying(!isPlaying);
   };
+  
 
   return (
     <main className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground p-4 sm:p-6 md:p-8 overflow-hidden">
@@ -179,24 +203,39 @@ export default function Home() {
               className="bg-background/50 focus:ring-accent focus:ring-2 border-muted-foreground/50 h-11 text-base"
             />
           </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="space-y-4">
+              <label htmlFor="instances" className="text-sm font-medium flex items-center gap-2 text-accent">
+                <Layers className="w-5 h-5" />
+                Echo Instances: <span className="font-bold text-primary text-lg">{instanceCount[0]}</span>
+              </label>
+              <Slider
+                id="instances"
+                min={1}
+                max={10}
+                step={1}
+                value={instanceCount}
+                onValueChange={(value) => {
+                  setInstanceCount(value);
+                }}
+              />
+            </div>
 
-          <div className="space-y-4">
-            <label htmlFor="instances" className="text-sm font-medium flex items-center gap-2 text-accent">
-              <Layers className="w-5 h-5" />
-              Echo Instances: <span className="font-bold text-primary text-lg">{instanceCount[0]}</span>
-            </label>
-            <Slider
-              id="instances"
-              min={1}
-              max={10}
-              step={1}
-              value={instanceCount}
-              onValueChange={(value) => {
-                setIsPlaying(false);
-                setArePlayersReady(false);
-                setInstanceCount(value);
-              }}
-            />
+            <div className="space-y-4">
+              <label htmlFor="delay" className="text-sm font-medium flex items-center gap-2 text-accent">
+                <Timer className="w-5 h-5" />
+                Echo Delay: <span className="font-bold text-primary text-lg">{delay[0]}ms</span>
+              </label>
+              <Slider
+                id="delay"
+                min={10}
+                max={500}
+                step={10}
+                value={delay}
+                onValueChange={setDelay}
+              />
+            </div>
           </div>
 
           <div className={cn("relative aspect-video w-full rounded-lg overflow-hidden bg-black transition-all duration-500 ease-in-out border-2 border-transparent", videoId ? 'h-auto border-primary/20' : 'h-0 py-0 border-0 scale-95 opacity-0')}>
@@ -224,6 +263,5 @@ export default function Home() {
       </Card>
     </main>
   );
-}
 
     
