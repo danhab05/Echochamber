@@ -103,7 +103,7 @@ export default function Home() {
 
   useEffect(() => {
     resetState(instanceCount[0]);
-  }, [instanceCount, resetState]);
+  }, [videoUrl, instanceCount[0], resetState]);
 
 
   const createPlayers = useCallback(() => {
@@ -112,18 +112,17 @@ export default function Home() {
     readyPlayersCount.current = 0;
     setArePlayersReady(false);
     
-    const onPlayerReady = (event: any) => {
-        const playerIndex = playersRef.current.findIndex(p => p && p.getIframe && event.target.getIframe && p.getIframe().id === event.target.getIframe().id);
-        
+    const onPlayerReady = (event: any, playerIndex: number) => {
         readyPlayersCount.current += 1;
 
+        const p = event.target;
+        p.unMute();
+        
         if (playerIndex === 0) {
-          event.target.unMute();
-          event.target.setVolume(volume[0]);
-        } else if (playerIndex > 0) {
-          event.target.unMute();
+          p.setVolume(volume[0]);
+        } else {
           const echoVolume = Math.max(0, volume[0] - (playerIndex * 25));
-          event.target.setVolume(echoVolume);
+          p.setVolume(echoVolume);
         }
 
         if (readyPlayersCount.current === instanceCount[0]) {
@@ -149,10 +148,10 @@ export default function Home() {
           if (player && typeof player.seekTo === 'function' && typeof player.playVideo === 'function') {
             const playWithDelay = () => {
               if (playersRef.current[0]?.getPlayerState() === window.YT.PlayerState.PLAYING) {
+                  player.seekTo(currentTime, true);
                   player.playVideo();
               }
             };
-            player.seekTo(currentTime, true);
             setTimeout(playWithDelay, index * delay[0] * 1000);
           }
         });
@@ -166,14 +165,15 @@ export default function Home() {
       const mainPlayerPlaying = playersRef.current[0]?.getPlayerState() === window.YT.PlayerState.PLAYING;
       playersRef.current.forEach((player, index) => {
           if (player && typeof player.seekTo === 'function') {
-            const playWithDelay = () => {
+            
+            player.seekTo(currentTime, true);
+
+            if (mainPlayerPlaying) {
+               const playWithDelay = () => {
                 if (playersRef.current[0]?.getPlayerState() === window.YT.PlayerState.PLAYING) {
                   player.playVideo();
                 }
               };
-
-            player.seekTo(currentTime, true);
-            if (mainPlayerPlaying) {
                setTimeout(playWithDelay, index * delay[0] * 1000);
             } else {
               player.pauseVideo();
@@ -206,7 +206,7 @@ export default function Home() {
             origin: window.location.origin
           },
           events: {
-            'onReady': onPlayerReady,
+            'onReady': (e: any) => onPlayerReady(e, i),
             'onStateChange': i === 0 ? onMainPlayerStateChange : undefined,
           }
         });
@@ -326,7 +326,10 @@ export default function Home() {
                 max={9}
                 step={1}
                 value={instanceCount}
-                onValueChange={setInstanceCount}
+                onValueChange={(value) => {
+                  setInstanceCount(value);
+                  resetState(value[0]);
+                }}
               />
             </div>
 
@@ -400,3 +403,5 @@ export default function Home() {
     </main>
   );
 }
+
+    
