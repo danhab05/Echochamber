@@ -141,14 +141,14 @@ export default function Home() {
         setIsPlaying(true);
         playersRef.current.forEach((player, index) => {
           if (index === 0) return;
-          setTimeout(() => {
-            if (mainPlayer.getPlayerState() === window.YT.PlayerState.PLAYING) {
-              if (player && typeof player.seekTo === 'function' && typeof player.playVideo === 'function') {
-                player.seekTo(currentTime, true);
-                player.playVideo();
-              }
-            }
-          }, index * delay[0]);
+          if (player && typeof player.seekTo === 'function' && typeof player.playVideo === 'function') {
+            player.seekTo(currentTime, true);
+            setTimeout(() => {
+                if (playersRef.current[0]?.getPlayerState() === window.YT.PlayerState.PLAYING) {
+                    player.playVideo();
+                }
+            }, index * delay[0]);
+          }
         });
       } else if (newState === window.YT.PlayerState.PAUSED || newState === window.YT.PlayerState.ENDED) {
         setIsPlaying(false);
@@ -160,14 +160,16 @@ export default function Home() {
       const mainPlayerPlaying = playersRef.current[0]?.getPlayerState() === window.YT.PlayerState.PLAYING;
       playersRef.current.forEach((player, index) => {
           if (player && typeof player.seekTo === 'function') {
-             setTimeout(() => {
-               player.seekTo(currentTime, true);
-               if (mainPlayerPlaying) {
-                 player.playVideo();
-               } else {
-                 player.pauseVideo();
-               }
-             }, index * delay[0]);
+            player.seekTo(currentTime, true);
+            if (mainPlayerPlaying) {
+               setTimeout(() => {
+                 if (playersRef.current[0]?.getPlayerState() === window.YT.PlayerState.PLAYING) {
+                   player.playVideo();
+                 }
+               }, index * delay[0]);
+            } else {
+              player.pauseVideo();
+            }
           }
       });
     };
@@ -177,7 +179,6 @@ export default function Home() {
       const container = document.getElementById(containerId);
       
       if (container) {
-        // Clear previous player if any
         container.innerHTML = '';
         
         const player = new window.YT.Player(containerId, {
@@ -210,7 +211,7 @@ export default function Home() {
                         return;
                     }
                     const currentTime = p.getCurrentTime();
-                    if (lastTime !== -1 && Math.abs(currentTime - lastTime) > 1.5) {
+                    if (typeof currentTime === 'number' && lastTime !== -1 && Math.abs(currentTime - lastTime) > 1.5) {
                         onMainPlayerSeek(currentTime);
                     }
                     lastTime = currentTime;
@@ -359,3 +360,5 @@ export default function Home() {
     </main>
   );
 }
+
+    
