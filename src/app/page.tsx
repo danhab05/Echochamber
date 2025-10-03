@@ -24,11 +24,12 @@ export default function Home() {
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isApiReady, setIsApiReady] = useState<boolean>(false);
   const [arePlayersReady, setArePlayersReady] = useState<boolean>(false);
-  const [videoKey, setVideoKey] = useState<string>(Date.now().toString());
+  const [videoKey, setVideoKey] = useState<string>(() => Date.now().toString());
 
   const playersRef = useRef<any[]>([]);
   const readyPlayersCount = useRef(0);
   const mainPlayerState = useRef<number>(-1);
+  const seekIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const { toast } = useToast();
 
@@ -80,6 +81,10 @@ export default function Home() {
     setArePlayersReady(false);
     readyPlayersCount.current = 0;
     mainPlayerState.current = -1;
+    if (seekIntervalRef.current) {
+        clearInterval(seekIntervalRef.current);
+        seekIntervalRef.current = null;
+    }
     playersRef.current.forEach(player => {
       if (player && typeof player.destroy === 'function') {
         player.destroy();
@@ -94,12 +99,14 @@ export default function Home() {
       handleUrlError();
     }
     resetState();
-  }, [videoUrl, videoId, handleUrlError, instanceCount, resetState]);
+  }, [videoUrl, handleUrlError, instanceCount, resetState]);
 
 
   const createPlayers = useCallback(() => {
-    if (!isApiReady || !videoId) return;
+    if (!isApiReady || !videoId || playersRef.current.length > 0) return;
 
+    readyPlayersCount.current = 0;
+    
     const onPlayerReady = (event: any) => {
         const playerIndex = playersRef.current.findIndex(p => p && p.getIframe && event.target.getIframe && p.getIframe().id === event.target.getIframe().id);
         
@@ -135,7 +142,7 @@ export default function Home() {
         playersRef.current.forEach((player, index) => {
           if (index === 0) return;
           setTimeout(() => {
-            if (mainPlayerState.current === window.YT.PlayerState.PLAYING) {
+            if (mainPlayer.getPlayerState() === window.YT.PlayerState.PLAYING) {
               if (player && typeof player.seekTo === 'function' && typeof player.playVideo === 'function') {
                 player.seekTo(currentTime, true);
                 player.playVideo();
@@ -150,12 +157,15 @@ export default function Home() {
     };
     
     const onMainPlayerSeek = (currentTime: number) => {
+      const mainPlayerPlaying = playersRef.current[0]?.getPlayerState() === window.YT.PlayerState.PLAYING;
       playersRef.current.forEach((player, index) => {
           if (player && typeof player.seekTo === 'function') {
              setTimeout(() => {
                player.seekTo(currentTime, true);
-               if (isPlaying) {
+               if (mainPlayerPlaying) {
                  player.playVideo();
+               } else {
+                 player.pauseVideo();
                }
              }, index * delay[0]);
           }
@@ -163,9 +173,14 @@ export default function Home() {
     };
     
     playersRef.current = Array.from({ length: instanceCount[0] }).map((_, i) => {
-      const container = document.getElementById(`player-container-${i}`);
+      const containerId = `player-container-${i}`;
+      const container = document.getElementById(containerId);
+      
       if (container) {
-        const player = new window.YT.Player(container, {
+        // Clear previous player if any
+        container.innerHTML = '';
+        
+        const player = new window.YT.Player(containerId, {
           height: '100%',
           width: '100%',
           videoId: videoId,
@@ -185,8 +200,9 @@ export default function Home() {
         });
 
         if (i === 0) {
+            if (seekIntervalRef.current) clearInterval(seekIntervalRef.current);
             let lastTime = -1;
-            const checkSeek = setInterval(() => {
+            seekIntervalRef.current = setInterval(() => {
                 const p = playersRef.current[0];
                 if (p && typeof p.getPlayerState === 'function') {
                     const playerState = p.getPlayerState();
@@ -198,8 +214,6 @@ export default function Home() {
                         onMainPlayerSeek(currentTime);
                     }
                     lastTime = currentTime;
-                } else {
-                    clearInterval(checkSeek);
                 }
             }, 500);
           }
@@ -208,19 +222,16 @@ export default function Home() {
       return null;
     }).filter(p => p !== null);
 
-  }, [isApiReady, videoId, instanceCount, delay, isPlaying]);
+  }, [isApiReady, videoId, instanceCount, delay]);
 
   useEffect(() => {
     if(isApiReady && videoId) {
       createPlayers();
     }
     return () => {
-      // This is a failsafe cleanup
-      playersRef.current.forEach(player => {
-        if (player && typeof player.destroy === 'function') {
-          player.destroy();
-        }
-      });
+      if (seekIntervalRef.current) {
+        clearInterval(seekIntervalRef.current);
+      }
     };
   }, [videoKey, isApiReady, videoId, createPlayers]);
 
@@ -311,11 +322,11 @@ export default function Home() {
 
           <div key={videoKey} className={cn(
             "relative w-full rounded-lg overflow-hidden bg-black/50 transition-all duration-500 ease-in-out border-2 border-transparent",
-            videoId ? 'h-auto border-primary/20' : 'h-0 py-0 border-0 scale-95 opacity-0'
+            videoId ? 'min-h-[100px] border-primary/20' : 'h-0 py-0 border-0 scale-95 opacity-0'
           )}>
             <div className={cn("grid gap-1", gridCols)}>
               {Array.from({ length: instanceCount[0] }).map((_, i) => (
-                <div key={i} className="aspect-video relative group/player">
+                <div key={`${videoKey}-${i}`} className="aspect-video relative group/player">
                    <div id={`player-container-${i}`} className="w-full h-full"></div>
                    {i > 0 && <div className="absolute inset-0 bg-black/50 group-hover/player:bg-black/20 transition-colors pointer-events-none"></div>}
                 </div>
