@@ -35,16 +35,27 @@ export default function Home() {
   }, [videoUrl]);
 
   useEffect(() => {
-    if (window.YT && window.YT.Player) {
+    const onApiReady = () => {
       setIsApiReady(true);
+    };
+
+    if (window.YT && window.YT.Player) {
+      onApiReady();
     } else {
-      window.onYouTubeIframeAPIReady = () => {
-        setIsApiReady(true);
-      };
-      const tag = document.createElement('script');
-      tag.src = "https://www.youtube.com/iframe_api";
-      document.body.appendChild(tag);
+      window.onYouTubeIframeAPIReady = onApiReady;
+      if (!document.querySelector('script[src="https://www.youtube.com/iframe_api"]')) {
+        const tag = document.createElement('script');
+        tag.src = "https://www.youtube.com/iframe_api";
+        document.body.appendChild(tag);
+      }
     }
+
+    return () => {
+      // Clean up the global callback
+      if (window.onYouTubeIframeAPIReady === onApiReady) {
+        delete window.onYouTubeIframeAPIReady;
+      }
+    };
   }, []);
 
   const handleUrlError = useCallback(() => {
@@ -55,8 +66,7 @@ export default function Home() {
     });
   }, [toast]);
   
-  const onPlayerReady = useCallback((event: any, index: number) => {
-    playersRef.current[index] = event.target;
+  const onPlayerReady = useCallback(() => {
     readyPlayersCount.current += 1;
     if (readyPlayersCount.current === instanceCount[0]) {
       setArePlayersReady(true);
@@ -64,40 +74,60 @@ export default function Home() {
   }, [instanceCount]);
 
   useEffect(() => {
-    if (!isApiReady) return;
-
-    if (videoUrl && !videoId) {
-      handleUrlError();
+    if (!isApiReady) {
+      return;
     }
     
-    playersRef.current.forEach(player => player?.destroy());
+    // Destroy existing players
+    playersRef.current.forEach(player => {
+      if (player && typeof player.destroy === 'function') {
+        player.destroy();
+      }
+    });
     playersRef.current = [];
     readyPlayersCount.current = 0;
     setArePlayersReady(false);
     setIsPlaying(false);
 
+    if (videoUrl && !videoId) {
+      handleUrlError();
+      return;
+    }
+
     if (videoId) {
       Array.from({ length: instanceCount[0] }).forEach((_, i) => {
-        new window.YT.Player(`player-container-${i}`, {
-          height: i === 0 ? '100%' : '0',
-          width: i === 0 ? '100%' : '0',
-          videoId: videoId,
-          playerVars: {
-            playsinline: 1,
-            controls: i === 0 ? 1 : 0,
-            autoplay: 0,
-            modestbranding: 1,
-            rel: 0,
-            disablekb: 1,
-          },
-          events: {
-            'onReady': (event: any) => onPlayerReady(event, i),
-          }
-        });
+        // Ensure the container exists
+        const container = document.getElementById(`player-container-${i}`);
+        if (container) {
+          playersRef.current[i] = new window.YT.Player(`player-container-${i}`, {
+            height: i === 0 ? '100%' : '0',
+            width: i === 0 ? '100%' : '0',
+            videoId: videoId,
+            playerVars: {
+              playsinline: 1,
+              controls: i === 0 ? 1 : 0,
+              autoplay: 0,
+              modestbranding: 1,
+              rel: 0,
+              disablekb: 1,
+            },
+            events: {
+              'onReady': onPlayerReady,
+            }
+          });
+        }
       });
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isApiReady, videoId, instanceCount, onPlayerReady]);
+
+    // Cleanup function
+    return () => {
+      playersRef.current.forEach(player => {
+        if (player && typeof player.destroy === 'function') {
+          player.destroy();
+        }
+      });
+    };
+  }, [isApiReady, videoId, instanceCount, onPlayerReady, handleUrlError]);
 
 
   const handlePlayPause = () => {
@@ -110,6 +140,7 @@ export default function Home() {
       if (player && typeof player.playVideo === 'function' && typeof player.pauseVideo === 'function') {
         if (nextIsPlaying) {
           setTimeout(() => {
+            player.seekTo(0);
             player.playVideo();
           }, index * 120); // 120ms echo delay
         } else {
