@@ -20,7 +20,7 @@ declare global {
 export default function Home() {
   const [videoUrl, setVideoUrl] = useState<string>('https://www.youtube.com/watch?v=2zNSgSzhBfM');
   const [instanceCount, setInstanceCount] = useState<number[]>([3]);
-  const [delay, setDelay] = useState<number[]>([120]);
+  const [delay, setDelay] = useState<number[]>([0.12]);
   const [volume, setVolume] = useState<number[]>([100]);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isApiReady, setIsApiReady] = useState<boolean>(false);
@@ -99,8 +99,6 @@ export default function Home() {
     if (videoUrl && !videoId) {
       handleUrlError();
     }
-    // Only reset if videoUrl or instanceCount changes
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoUrl, videoId, handleUrlError]);
 
   useEffect(() => {
@@ -155,7 +153,7 @@ export default function Home() {
               }
             };
             player.seekTo(currentTime, true);
-            setTimeout(playWithDelay, index * delay[0]);
+            setTimeout(playWithDelay, index * delay[0] * 1000);
           }
         });
       } else if (newState === window.YT.PlayerState.PAUSED || newState === window.YT.PlayerState.ENDED) {
@@ -176,7 +174,7 @@ export default function Home() {
 
             player.seekTo(currentTime, true);
             if (mainPlayerPlaying) {
-               setTimeout(playWithDelay, index * delay[0]);
+               setTimeout(playWithDelay, index * delay[0] * 1000);
             } else {
               player.pauseVideo();
             }
@@ -190,8 +188,8 @@ export default function Home() {
       
       if (container) {
         // Ensure container is empty before creating new player
-        if (container.firstChild) {
-            return playersRef.current[i] || null;
+        while (container.firstChild) {
+            container.removeChild(container.firstChild);
         }
         
         const player = new window.YT.Player(containerId, {
@@ -335,13 +333,13 @@ export default function Home() {
             <div className="space-y-4">
               <label htmlFor="delay" className="text-sm font-medium flex items-center gap-2 text-accent">
                 <Timer className="w-5 h-5" />
-                Echo Delay: <span className="font-bold text-primary text-lg">{delay[0]}ms</span>
+                Echo Delay: <span className="font-bold text-primary text-lg">{delay[0].toFixed(2)}s</span>
               </label>
               <Slider
                 id="delay"
-                min={10}
-                max={500}
-                step={10}
+                min={0.01}
+                max={0.5}
+                step={0.01}
                 value={delay}
                 onValueChange={setDelay}
               />
