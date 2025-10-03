@@ -101,12 +101,7 @@ export default function Home() {
     } else {
       resetState(instanceCount[0]);
     }
-  }, [videoUrl, handleUrlError]);
-
-  useEffect(() => {
-    resetState(instanceCount[0]);
-  }, [instanceCount[0]]);
-
+  }, [videoUrl, handleUrlError, instanceCount[0]]);
 
   const createPlayers = useCallback(() => {
     if (!isApiReady || !videoId) return;
@@ -189,7 +184,6 @@ export default function Home() {
       const container = document.getElementById(containerId);
       
       if (container) {
-        // Ensure container is empty before creating new player
         while (container.firstChild) {
             container.removeChild(container.firstChild);
         }
@@ -382,11 +376,6 @@ export default function Home() {
                   <p>Enter a valid YouTube URL to begin</p>
                </div>
             )}
-             {(!arePlayersReady && videoId) && (
-                 <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-white z-10">
-                    <p>Loading players...</p>
-                 </div>
-            )}
           </div>
         </CardContent>
         <CardFooter className="flex justify-center p-8">
@@ -404,3 +393,5 @@ export default function Home() {
     </main>
   );
 }
+
+    
