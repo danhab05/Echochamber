@@ -98,12 +98,14 @@ export default function Home() {
   useEffect(() => {
     if (videoUrl && !videoId) {
       handleUrlError();
+    } else {
+      resetState(instanceCount[0]);
     }
-  }, [videoUrl, videoId, handleUrlError]);
+  }, [videoUrl, handleUrlError]);
 
   useEffect(() => {
     resetState(instanceCount[0]);
-  }, [videoUrl, instanceCount[0], resetState]);
+  }, [instanceCount[0]]);
 
 
   const createPlayers = useCallback(() => {
@@ -328,7 +330,6 @@ export default function Home() {
                 value={instanceCount}
                 onValueChange={(value) => {
                   setInstanceCount(value);
-                  resetState(value[0]);
                 }}
               />
             </div>
@@ -403,5 +404,3 @@ export default function Home() {
     </main>
   );
 }
-
-    
