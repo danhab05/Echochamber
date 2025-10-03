@@ -66,18 +66,11 @@ export default function Home() {
     });
   }, [toast]);
   
-  const onPlayerReady = useCallback(() => {
-    readyPlayersCount.current += 1;
-    if (readyPlayersCount.current === instanceCount[0]) {
-      setArePlayersReady(true);
-    }
-  }, [instanceCount]);
-
-  useEffect(() => {
-    if (!isApiReady) {
+  const createPlayers = useCallback(() => {
+    if (!isApiReady || !videoId) {
       return;
     }
-    
+
     // Destroy existing players
     playersRef.current.forEach(player => {
       if (player && typeof player.destroy === 'function') {
@@ -93,13 +86,18 @@ export default function Home() {
       handleUrlError();
       return;
     }
-
-    if (videoId) {
-      Array.from({ length: instanceCount[0] }).forEach((_, i) => {
-        // Ensure the container exists
+    
+    const onPlayerReady = (event: any) => {
+        readyPlayersCount.current += 1;
+        if (readyPlayersCount.current === instanceCount[0]) {
+            setArePlayersReady(true);
+        }
+    };
+    
+    Array.from({ length: instanceCount[0] }).forEach((_, i) => {
         const container = document.getElementById(`player-container-${i}`);
         if (container) {
-          playersRef.current[i] = new window.YT.Player(`player-container-${i}`, {
+          playersRef.current[i] = new window.YT.Player(container, {
             height: i === 0 ? '100%' : '0',
             width: i === 0 ? '100%' : '0',
             videoId: videoId,
@@ -117,8 +115,11 @@ export default function Home() {
           });
         }
       });
-    }
+  }, [isApiReady, videoId, instanceCount, handleUrlError]);
 
+  useEffect(() => {
+    createPlayers();
+    
     // Cleanup function
     return () => {
       playersRef.current.forEach(player => {
@@ -127,7 +128,7 @@ export default function Home() {
         }
       });
     };
-  }, [isApiReady, videoId, instanceCount, onPlayerReady, handleUrlError]);
+  }, [createPlayers]);
 
 
   const handlePlayPause = () => {
@@ -190,12 +191,16 @@ export default function Home() {
               max={10}
               step={1}
               value={instanceCount}
-              onValueChange={setInstanceCount}
+              onValueChange={(value) => {
+                setIsPlaying(false);
+                setArePlayersReady(false);
+                setInstanceCount(value);
+              }}
             />
           </div>
 
           <div className={cn("relative aspect-video w-full rounded-lg overflow-hidden bg-black transition-all duration-500 ease-in-out border-2 border-transparent", videoId ? 'h-auto border-primary/20' : 'h-0 py-0 border-0 scale-95 opacity-0')}>
-              {Array.from({ length: instanceCount[0] }).map((_, i) => (
+              {Array.from({ length: 10 }).map((_, i) => (
                 <div key={i} id={`player-container-${i}`} className={cn(i === 0 ? 'w-full h-full' : 'w-0 h-0 absolute')}></div>
               ))}
               {!videoId && (
@@ -220,3 +225,5 @@ export default function Home() {
     </main>
   );
 }
+
+    
