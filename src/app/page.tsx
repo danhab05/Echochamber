@@ -1,397 +1,149 @@
-
 "use client";
 
-import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
-import { Slider } from "@/components/ui/slider";
-import { Youtube, Layers, Play, Pause, Music4, Timer, Volume2 } from 'lucide-react';
-import { cn } from '@/lib/utils';
-import { useToast } from "@/hooks/use-toast";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { FileAudio, Youtube } from "lucide-react";
+import { Controls } from "@/components/echo/controls";
+import { FileStage } from "@/components/echo/file-stage";
+import { YouTubeStage } from "@/components/echo/youtube-stage";
+import { DEFAULT_PARAMS, DELAY_RANGE, EchoParams, MAX_VOICES, SourceMode, clamp } from "@/lib/echo";
+import { cn } from "@/lib/utils";
 
-declare global {
-  interface Window {
-    onYouTubeIframeAPIReady?: () => void;
-    YT?: any;
-  }
-}
+const PARAMS_KEY = "echochamber:params";
+const MODE_KEY = "echochamber:mode";
 
 export default function Home() {
-  const [videoUrl, setVideoUrl] = useState<string>('https://www.youtube.com/watch?v=2zNSgSzhBfM');
-  const [instanceCount, setInstanceCount] = useState<number[]>([3]);
-  const [delay, setDelay] = useState<number[]>([0.12]);
-  const [volume, setVolume] = useState<number[]>([100]);
-  const [isPlaying, setIsPlaying] = useState<boolean>(false);
-  const [isApiReady, setIsApiReady] = useState<boolean>(false);
-  const [arePlayersReady, setArePlayersReady] = useState<boolean>(false);
-  const [videoKey, setVideoKey] = useState<string>(() => Date.now().toString());
+  const [mode, setMode] = useState<SourceMode>("youtube");
+  const [params, setParams] = useState<EchoParams>(DEFAULT_PARAMS);
 
-  const playersRef = useRef<any[]>([]);
-  const readyPlayersCount = useRef(0);
-  const mainPlayerState = useRef<number>(-1);
-  const seekIntervalRef = useRef<NodeJS.Timeout | null>(null);
-
-  const { toast } = useToast();
-
-  const videoId = useMemo(() => {
-    if (!videoUrl) return null;
-    const regex = /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:[^\/\n\s]+\/\S+\/|(?:v|e(?:mbed)?)\/|\S*?[?&]v=)|youtu\.be\/)([a-zA-Z0-9_-]{11})/;
-    const match = videoUrl.match(regex);
-    return match ? match[1] : null;
-  }, [videoUrl]);
-
+  // restore settings (after mount, so server and client render the same thing)
   useEffect(() => {
-    const onApiReady = () => {
-      setIsApiReady(true);
-    };
-
-    if (window.YT && window.YT.Player) {
-      onApiReady();
-    } else {
-      if (!document.querySelector('script[src="https://www.youtube.com/iframe_api"]')) {
-        const tag = document.createElement('script');
-        tag.src = "https://www.youtube.com/iframe_api";
-        const firstScriptTag = document.getElementsByTagName('script')[0];
-        if (firstScriptTag && firstScriptTag.parentNode) {
-          firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
-        } else {
-          document.head.appendChild(tag);
-        }
-      }
-      window.onYouTubeIframeAPIReady = onApiReady;
-    }
-
-    return () => {
-      if (window.onYouTubeIframeAPIReady === onApiReady) {
-        delete window.onYouTubeIframeAPIReady;
-      }
-    };
+    try {
+      const saved = JSON.parse(localStorage.getItem(PARAMS_KEY) || "null");
+      if (saved && typeof saved === "object") setParams((p) => sanitize({ ...p, ...saved }));
+      const m = localStorage.getItem(MODE_KEY);
+      if (m === "youtube" || m === "file") setMode(m);
+    } catch {}
   }, []);
-  
-  const handleUrlError = useCallback(() => {
-    toast({
-      variant: "destructive",
-      title: "Invalid YouTube URL",
-      description: "Please paste a valid YouTube video URL.",
-    });
-  }, [toast]);
-
-  const resetState = useCallback((newInstanceCount: number) => {
-    setIsPlaying(false);
-    setArePlayersReady(false);
-    readyPlayersCount.current = 0;
-    mainPlayerState.current = -1;
-    if (seekIntervalRef.current) {
-        clearInterval(seekIntervalRef.current);
-        seekIntervalRef.current = null;
-    }
-    playersRef.current.forEach(player => {
-      if (player && typeof player.destroy === 'function') {
-        player.destroy();
-      }
-    });
-    playersRef.current = new Array(newInstanceCount);
-    setVideoKey(Date.now().toString());
-  }, []);
-  
-  useEffect(() => {
-    if (videoUrl && !videoId) {
-      handleUrlError();
-    } else {
-      resetState(instanceCount[0]);
-    }
-  }, [videoUrl, handleUrlError, instanceCount, resetState]);
-
-  const createPlayers = useCallback(() => {
-    if (!isApiReady || !videoId) return;
-    
-    const onPlayerReady = (event: any, playerIndex: number) => {
-        const p = event.target;
-        p.unMute();
-        
-        if (playerIndex === 0) {
-          p.setVolume(volume[0]);
-        } else {
-          const echoVolume = Math.max(0, volume[0] - (playerIndex * 25));
-          p.setVolume(echoVolume);
-        }
-        
-        // Make the app playable as soon as the main player is ready.
-        if (playerIndex === 0) {
-            setArePlayersReady(true);
-        }
-    };
-    
-    const onMainPlayerStateChange = (event: any) => {
-      const newState = event.data;
-      if (mainPlayerState.current === newState) return;
-      mainPlayerState.current = newState;
-      
-      const mainPlayer = playersRef.current[0];
-      if (!mainPlayer || typeof mainPlayer.getCurrentTime !== 'function') return;
-
-      const currentTime = mainPlayer.getCurrentTime();
-      if (typeof currentTime !== 'number') return;
-  
-      if (newState === window.YT.PlayerState.PLAYING) {
-        setIsPlaying(true);
-        playersRef.current.forEach((player, index) => {
-          if (index === 0 || !player) return;
-          if (typeof player.seekTo === 'function' && typeof player.playVideo === 'function') {
-            const playWithDelay = () => {
-              if (playersRef.current[0]?.getPlayerState() === window.YT.PlayerState.PLAYING) {
-                  player.seekTo(currentTime, true);
-                  player.playVideo();
-              }
-            };
-            setTimeout(playWithDelay, index * delay[0] * 1000);
-          }
-        });
-      } else if (newState === window.YT.PlayerState.PAUSED || newState === window.YT.PlayerState.ENDED) {
-        setIsPlaying(false);
-        playersRef.current.forEach(p => p?.pauseVideo());
-      }
-    };
-    
-    const onMainPlayerSeek = (currentTime: number) => {
-      const mainPlayerPlaying = playersRef.current[0]?.getPlayerState() === window.YT.PlayerState.PLAYING;
-      playersRef.current.forEach((player, index) => {
-          if (player && typeof player.seekTo === 'function') {
-            
-            player.seekTo(currentTime, true);
-
-            if (mainPlayerPlaying) {
-               const playWithDelay = () => {
-                if (playersRef.current[0]?.getPlayerState() === window.YT.PlayerState.PLAYING) {
-                  player.playVideo();
-                }
-              };
-               setTimeout(playWithDelay, index * delay[0] * 1000);
-            } else {
-              player.pauseVideo();
-            }
-          }
-      });
-    };
-    
-    playersRef.current = Array.from({ length: instanceCount[0] }).map((_, i) => {
-      const containerId = `player-container-${i}`;
-      const container = document.getElementById(containerId);
-      
-      if (container) {
-        // Ensure container is empty before creating a new player
-        while (container.firstChild) {
-            container.removeChild(container.firstChild);
-        }
-        
-        const player = new window.YT.Player(containerId, {
-          height: '100%',
-          width: '100%',
-          videoId: videoId,
-          playerVars: {
-            playsinline: 1,
-            controls: i === 0 ? 1 : 0,
-            autoplay: 0,
-            modestbranding: 1,
-            rel: 0,
-            disablekb: i === 0 ? 0 : 1,
-            origin: window.location.origin
-          },
-          events: {
-            'onReady': (e: any) => onPlayerReady(e, i),
-            'onStateChange': i === 0 ? onMainPlayerStateChange : undefined,
-          }
-        });
-
-        if (i === 0) {
-            if (seekIntervalRef.current) clearInterval(seekIntervalRef.current);
-            let lastTime = -1;
-            seekIntervalRef.current = setInterval(() => {
-                const p = playersRef.current[0];
-                if (p && typeof p.getPlayerState === 'function') {
-                    const playerState = p.getPlayerState();
-                    if (playerState !== window.YT.PlayerState.PLAYING && playerState !== window.YT.PlayerState.PAUSED) {
-                        return;
-                    }
-                    const currentTime = p.getCurrentTime();
-                    if (typeof currentTime === 'number' && lastTime !== -1 && Math.abs(currentTime - lastTime) > 1.5) {
-                        onMainPlayerSeek(currentTime);
-                    }
-                    lastTime = currentTime;
-                }
-            }, 500);
-          }
-        return player;
-      }
-      return null;
-    }).filter(p => p !== null);
-
-  }, [isApiReady, videoId, instanceCount, delay, volume]);
 
   useEffect(() => {
-    if(isApiReady && videoId) {
-      createPlayers();
-    }
-    return () => {
-      if (seekIntervalRef.current) {
-        clearInterval(seekIntervalRef.current);
-      }
-    };
-  }, [videoKey, isApiReady, videoId, createPlayers]);
+    try {
+      localStorage.setItem(PARAMS_KEY, JSON.stringify(params));
+      localStorage.setItem(MODE_KEY, mode);
+    } catch {}
+  }, [params, mode]);
 
-  useEffect(() => {
-    if (!playersRef.current.length) return;
-    playersRef.current.forEach((player, index) => {
-      if (player && typeof player.setVolume === 'function') {
-        if (index === 0) {
-          player.setVolume(volume[0]);
-        } else {
-          const echoVolume = Math.max(0, volume[0] - (index * 25));
-          player.setVolume(echoVolume);
-        }
-      }
-    });
-  }, [volume]);
+  const update = useCallback((patch: Partial<EchoParams>) => setParams((p) => sanitize({ ...p, ...patch })), []);
 
-  const handlePlayPause = () => {
-    if (!arePlayersReady) return;
-  
-    const mainPlayer = playersRef.current[0];
-    if (!mainPlayer || typeof mainPlayer.getPlayerState !== 'function') return;
-
-    const playerState = mainPlayer.getPlayerState();
-  
-    if (playerState === window.YT.PlayerState.PLAYING) {
-      mainPlayer.pauseVideo();
-    } else {
-      mainPlayer.playVideo();
-    }
-  };
-  
-  const gridCols = useMemo(() => {
-    const count = instanceCount[0];
-    if (count <= 1) return 'grid-cols-1';
-    if (count <= 4) return 'grid-cols-2';
-    if (count <= 9) return 'grid-cols-3';
-    return 'grid-cols-3'; // Max
-  }, [instanceCount]);
-
+  // YouTube can't go as low as a local file: clamp without losing the user's value.
+  const effective = useMemo(() => {
+    const { min, max } = DELAY_RANGE[mode];
+    return { ...params, delayMs: clamp(params.delayMs, min, max) };
+  }, [params, mode]);
 
   return (
-    <main className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground p-4 sm:p-6 md:p-8 overflow-hidden">
-      <div className="absolute inset-0 -z-10 h-full w-full bg-background bg-[radial-gradient(hsl(var(--primary)/0.15)_1px,transparent_1px)] [background-size:16px_16px]"></div>
-      <Card className="w-full max-w-5xl bg-card/80 backdrop-blur-xl border-primary/20 shadow-2xl shadow-primary/10 transition-all animate-in fade-in duration-500">
-        <CardHeader className="text-center p-8">
-          <div className="flex justify-center items-center gap-3 mb-2">
-             <Music4 className="w-10 h-10 text-primary text-glow-primary" />
-             <CardTitle className="font-headline text-4xl md:text-5xl tracking-tight font-bold text-glow-primary">EchoChamber</CardTitle>
-          </div>
-          <CardDescription className="text-muted-foreground">
-            Transform any YouTube video into a cascade of sound.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-8 px-8">
-          <div className="space-y-2">
-            <label htmlFor="youtube-url" className="text-sm font-medium flex items-center gap-2 text-accent">
-              <Youtube className="w-5 h-5" />
-              YouTube Video URL
-            </label>
-            <Input 
-              id="youtube-url"
-              type="text" 
-              placeholder="e.g. https://www.youtube.com/watch?v=..."
-              value={videoUrl}
-              onChange={(e) => setVideoUrl(e.target.value)}
-              className="bg-background/50 focus:ring-accent focus:ring-2 border-muted-foreground/50 h-11 text-base"
-            />
-          </div>
-          
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="space-y-4">
-              <label htmlFor="instances" className="text-sm font-medium flex items-center gap-2 text-accent">
-                <Layers className="w-5 h-5" />
-                Echo Instances: <span className="font-bold text-primary text-lg">{instanceCount[0]}</span>
-              </label>
-              <Slider
-                id="instances"
-                min={1}
-                max={9}
-                step={1}
-                value={instanceCount}
-                onValueChange={(value) => {
-                  setInstanceCount(value);
-                }}
-              />
-            </div>
+    <main className="relative min-h-screen overflow-x-hidden">
+      <Backdrop />
 
-            <div className="space-y-4">
-              <label htmlFor="delay" className="text-sm font-medium flex items-center gap-2 text-accent">
-                <Timer className="w-5 h-5" />
-                Echo Delay: <span className="font-bold text-primary text-lg">{delay[0].toFixed(2)}s</span>
-              </label>
-              <Slider
-                id="delay"
-                min={0.01}
-                max={0.5}
-                step={0.01}
-                value={delay}
-                onValueChange={setDelay}
-              />
-            </div>
-
-            <div className="space-y-4">
-              <label htmlFor="volume" className="text-sm font-medium flex items-center gap-2 text-accent">
-                <Volume2 className="w-5 h-5" />
-                Master Volume: <span className="font-bold text-primary text-lg">{volume[0]}%</span>
-              </label>
-              <Slider
-                id="volume"
-                min={0}
-                max={100}
-                step={1}
-                value={volume}
-                onValueChange={setVolume}
-              />
+      <div className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:py-10">
+        <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div className="flex items-center gap-3">
+            <Logo />
+            <div>
+              <h1 className="font-headline text-3xl font-bold tracking-tight sm:text-4xl">
+                Echo<span className="bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">Chamber</span>
+              </h1>
+              <p className="text-sm text-muted-foreground">La même vidéo, jouée plusieurs fois avec un léger décalage.</p>
             </div>
           </div>
 
-          <div key={videoKey} className={cn(
-            "relative w-full rounded-lg overflow-hidden bg-black/50 transition-all duration-500 ease-in-out border-2 border-transparent",
-            videoId ? 'min-h-[100px] border-primary/20' : 'h-0 py-0 border-0 scale-95 opacity-0'
-          )}>
-            <div className={cn("grid gap-1", gridCols)}>
-              {Array.from({ length: instanceCount[0] }).map((_, i) => (
-                <div key={`${videoKey}-${i}`} className="aspect-video relative group/player">
-                   <div id={`player-container-${i}`} className="w-full h-full"></div>
-                   {i > 0 && <div className="absolute inset-0 bg-black/50 group-hover/player:bg-black/20 transition-colors pointer-events-none"></div>}
-                </div>
-              ))}
-            </div>
-            {!videoId && (
-               <div className="absolute inset-0 flex items-center justify-center text-muted-foreground">
-                  <p>Enter a valid YouTube URL to begin</p>
-               </div>
-            )}
-            {!arePlayersReady && videoId && (
-               <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-white">
-                  <p>Loading players...</p>
-               </div>
-            )}
+          <div role="tablist" aria-label="Source" className="flex rounded-xl border border-white/10 bg-card/70 p-1 backdrop-blur">
+            <ModeTab active={mode === "youtube"} onClick={() => setMode("youtube")} icon={<Youtube />} label="YouTube" />
+            <ModeTab active={mode === "file"} onClick={() => setMode("file")} icon={<FileAudio />} label="Fichier local" />
           </div>
-        </CardContent>
-        <CardFooter className="flex justify-center p-8">
-          <Button 
-            size="lg" 
-            onClick={handlePlayPause} 
-            disabled={!videoId || !arePlayersReady}
-            className="w-48 h-14 bg-primary hover:bg-primary/90 text-primary-foreground rounded-full text-lg font-bold transition-all duration-300 hover:shadow-lg hover:shadow-primary/30 active:scale-95 disabled:bg-muted disabled:shadow-none disabled:cursor-not-allowed flex items-center gap-2"
-          >
-            {isPlaying ? <Pause className="h-6 w-6" /> : <Play className="h-6 w-6" />}
-            <span>{isPlaying ? 'Pause' : 'Play'}</span>
-          </Button>
-        </CardFooter>
-      </Card>
+        </header>
+
+        <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
+          <section className="min-w-0">
+            {mode === "youtube" && <YouTubeStage params={effective} />}
+            {/* kept mounted so the loaded file survives a trip to the YouTube tab */}
+            <div className={cn(mode !== "file" && "hidden")}>
+              <FileStage params={effective} active={mode === "file"} />
+            </div>
+          </section>
+
+          <aside className="lg:sticky lg:top-6">
+            <Controls mode={mode} params={effective} onChange={update} />
+          </aside>
+        </div>
+
+        <footer className="grid gap-3 text-xs text-muted-foreground/80 sm:grid-cols-2">
+          <p>
+            <strong className="text-foreground/80">YouTube</strong> — chaque copie est un lecteur YouTube, recalé en continu sur
+            l&apos;original. Idéal pour des échos à partir de ~100 ms. Sur mobile, les navigateurs ne lisent souvent qu&apos;une vidéo
+            à la fois.
+          </p>
+          <p>
+            <strong className="text-foreground/80">Fichier local</strong> — le son passe par la Web Audio API : les copies sont
+            exactes à l&apos;échantillon près, du flanger (0,1 ms) au canyon (1 s), avec placement stéréo.
+          </p>
+        </footer>
+      </div>
     </main>
+  );
+}
+
+function sanitize(p: EchoParams): EchoParams {
+  const num = (v: unknown, d: number) => (typeof v === "number" && Number.isFinite(v) ? v : d);
+  return {
+    voices: Math.round(clamp(num(p.voices, DEFAULT_PARAMS.voices), 1, MAX_VOICES)),
+    delayMs: clamp(num(p.delayMs, DEFAULT_PARAMS.delayMs), DELAY_RANGE.file.min, DELAY_RANGE.file.max),
+    persistence: clamp(num(p.persistence, DEFAULT_PARAMS.persistence), 0.1, 1),
+    spread: clamp(num(p.spread, DEFAULT_PARAMS.spread), 0, 1),
+    volume: clamp(num(p.volume, DEFAULT_PARAMS.volume), 0, 1),
+  };
+}
+
+function ModeTab({ active, onClick, icon, label }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string }) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      className={cn(
+        "flex flex-1 items-center justify-center gap-2 whitespace-nowrap rounded-lg px-4 py-2 text-sm font-medium transition-all [&_svg]:h-4 [&_svg]:w-4",
+        active ? "bg-gradient-to-r from-primary/25 to-accent/25 text-foreground shadow-inner" : "text-muted-foreground hover:text-foreground",
+      )}
+    >
+      {icon}
+      {label}
+    </button>
+  );
+}
+
+function Logo() {
+  return (
+    <svg viewBox="0 0 48 48" className="h-12 w-12 shrink-0" aria-hidden>
+      <defs>
+        <linearGradient id="logo-g" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="hsl(var(--primary))" />
+          <stop offset="1" stopColor="hsl(var(--accent))" />
+        </linearGradient>
+      </defs>
+      {[20, 14, 8].map((r, i) => (
+        <circle key={r} cx="24" cy="24" r={r} fill="none" stroke="url(#logo-g)" strokeWidth={2.5 - i * 0.4} opacity={0.35 + i * 0.3} />
+      ))}
+      <circle cx="24" cy="24" r="3.5" fill="url(#logo-g)" />
+    </svg>
+  );
+}
+
+function Backdrop() {
+  return (
+    <div aria-hidden className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
+      <div className="absolute -left-40 -top-40 h-[520px] w-[520px] rounded-full bg-primary/20 blur-[120px]" />
+      <div className="absolute -bottom-48 -right-40 h-[560px] w-[560px] rounded-full bg-accent/15 blur-[130px]" />
+      <div className="absolute inset-0 bg-[radial-gradient(hsl(var(--foreground)/0.06)_1px,transparent_1px)] [background-size:22px_22px]" />
+    </div>
   );
 }
