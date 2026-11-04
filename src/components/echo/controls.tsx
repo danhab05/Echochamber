@@ -88,7 +88,7 @@ export function Controls({ mode, params, onChange }: ControlsProps) {
         />
         <div className="mt-1 flex justify-between text-[11px] text-muted-foreground/70">
           <span>{formatDelay(range.min)}</span>
-          <span>{mode === "file" ? "10 ms" : "100 ms"}</span>
+          <span>{formatDelay(sliderToDelay(DELAY_SLIDER_STEPS / 2, mode))}</span>
           <span>{formatDelay(range.max)}</span>
         </div>
         {mode === "youtube" && params.delayMs < YOUTUBE_PRECISE_FROM_MS && params.voices > 1 && (

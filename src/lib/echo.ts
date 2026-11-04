@@ -23,10 +23,13 @@ export const DEFAULT_PARAMS: EchoParams = {
   volume: 0.8,
 };
 
-/** Delay range per source. YouTube players can't be synced tighter than a few tens of ms. */
-export const DELAY_RANGE: Record<SourceMode, { min: number; max: number }> = {
-  file: { min: 0.1, max: 1000 },
-  youtube: { min: 20, max: 1000 },
+/**
+ * Delay range per source. 0 is always allowed (every copy in unison); above it
+ * the slider is logarithmic starting at `logMin`.
+ */
+export const DELAY_RANGE: Record<SourceMode, { min: number; logMin: number; max: number }> = {
+  file: { min: 0, logMin: 0.1, max: 1000 },
+  youtube: { min: 0, logMin: 5, max: 1000 },
 };
 
 /** Under this delay the YouTube sync is only approximate. */
@@ -86,14 +89,17 @@ export function volumeCurve(v: number) {
 export const DELAY_SLIDER_STEPS = 1000;
 
 export function delayToSlider(ms: number, mode: SourceMode) {
-  const { min, max } = DELAY_RANGE[mode];
-  const v = clamp(ms, min, max);
-  return Math.round((DELAY_SLIDER_STEPS * Math.log(v / min)) / Math.log(max / min));
+  const { logMin, max } = DELAY_RANGE[mode];
+  if (ms <= 0) return 0;
+  if (ms <= logMin) return 1;
+  const v = Math.min(ms, max);
+  return 1 + Math.round(((DELAY_SLIDER_STEPS - 1) * Math.log(v / logMin)) / Math.log(max / logMin));
 }
 
 export function sliderToDelay(pos: number, mode: SourceMode) {
-  const { min, max } = DELAY_RANGE[mode];
-  return roundDelay(min * Math.pow(max / min, pos / DELAY_SLIDER_STEPS));
+  const { logMin, max } = DELAY_RANGE[mode];
+  if (pos <= 0) return 0;
+  return roundDelay(logMin * Math.pow(max / logMin, (pos - 1) / (DELAY_SLIDER_STEPS - 1)));
 }
 
 export function roundDelay(ms: number) {
@@ -103,6 +109,7 @@ export function roundDelay(ms: number) {
 }
 
 export function formatDelay(ms: number) {
+  if (ms <= 0) return "0 ms";
   if (ms >= 1000) return `${(ms / 1000).toFixed(2)} s`;
   if (ms < 1) return `${ms.toFixed(2)} ms`;
   if (ms < 10) return `${ms.toFixed(1)} ms`;
