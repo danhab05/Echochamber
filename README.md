@@ -10,6 +10,7 @@ La même vidéo (ou le même son), jouée plusieurs fois en même temps avec un 
 | Décalage | 20 ms → 1 s (approximatif sous ~100 ms) | 0,1 ms → 1 s, exact à l'échantillon |
 | Stéréo | — | Copies réparties gauche / droite |
 | Image | Une vignette par lecteur | Vignettes recalculées à partir des images passées |
+| Arrière-plan | Dépend du navigateur (iOS met les vidéos YouTube en pause) | Oui : le son continue écran verrouillé, contrôles sur l'écran de verrouillage |
 
 Réglages : nombre de copies (1–12), décalage, persistance (volume gardé d'une copie à la suivante), largeur stéréo, volume général. Préréglages : flanger, chorus, doubleur, slapback, écho, canyon, foule. Espace = lecture / pause.
 

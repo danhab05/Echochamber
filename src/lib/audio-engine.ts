@@ -25,10 +25,22 @@ export class EchoAudioEngine {
   private readonly source: MediaElementAudioSourceNode;
   private readonly master: GainNode;
 
-  constructor(element: HTMLMediaElement) {
+  constructor(private readonly element: HTMLMediaElement) {
+    // iOS 17+: declare real media playback so the sound survives the lock screen
+    // and the silent switch.
+    try {
+      const session = (navigator as any).audioSession;
+      if (session) session.type = "playback";
+    } catch {}
     const Ctx: typeof AudioContext = window.AudioContext ?? (window as any).webkitAudioContext;
-    this.ctx = new Ctx({ latencyHint: "interactive" });
+    this.ctx = new Ctx({ latencyHint: "playback" });
     this.source = this.ctx.createMediaElementSource(element);
+    // If the OS suspends the graph while the file plays (background), wake it up:
+    // the element keeps playing and would otherwise be silent.
+    this.ctx.addEventListener("statechange", () => {
+      if (this.ctx.state !== "running" && this.ctx.state !== "closed" && !this.element.paused) void this.ctx.resume().catch(() => {});
+    });
+    element.addEventListener("play", () => void this.resume().catch(() => {}));
 
     const bus = this.ctx.createGain();
     const limiter = this.ctx.createDynamicsCompressor();

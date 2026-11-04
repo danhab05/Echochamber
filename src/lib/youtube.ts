@@ -278,8 +278,19 @@ export class YouTubeEchoController {
   /* ---------- sync loop ---------- */
 
   private ensureLoop() {
-    if (!this.loop) this.loop = setInterval(() => this.tick(), SYNC_INTERVAL);
+    if (!this.loop) {
+      this.loop = setInterval(() => this.tick(), SYNC_INTERVAL);
+      document.addEventListener("visibilitychange", this.onVisibility);
+    }
   }
+
+  /** Back from the background: timers may have been throttled, re-measure everything now. */
+  private onVisibility = () => {
+    if (document.visibilityState !== "visible" || !this.playing) return;
+    this.drift = this.drift.map(() => []);
+    this.lastFix = this.lastFix.map(() => 0);
+    this.sync();
+  };
 
   private tick() {
     const m = this.master;
@@ -381,5 +392,6 @@ export class YouTubeEchoController {
     this.clearTimers();
     if (this.loop) clearInterval(this.loop);
     this.loop = null;
+    if (typeof document !== "undefined") document.removeEventListener("visibilitychange", this.onVisibility);
   }
 }

@@ -20,7 +20,11 @@ const FRAME_WIDTH = 384;
 const TILE_WIDTH = 640;
 
 export function FileStage({ params, active }: { params: EchoParams; active: boolean }) {
-  const mediaRef = useRef<HTMLVideoElement>(null);
+  // The sound comes from an <audio> element: mobile browsers keep audio running
+  // in the background (screen locked, other app) but pause <video>. The video,
+  // muted, only follows the audio for the picture.
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const tilesRef = useRef<(HTMLCanvasElement | null)[]>([]);
   const paramsRef = useRef(params);
@@ -28,7 +32,9 @@ export function FileStage({ params, active }: { params: EchoParams; active: bool
 
   const [engine, setEngine] = useState<EchoAudioEngine | null>(null);
   const [file, setFile] = useState<LoadedFile | null>(null);
-  const [isVideo, setIsVideo] = useState(false);
+  // "probe" until the metadata tells whether the file has a picture
+  const [picture, setPicture] = useState<"probe" | "yes" | "no">("probe");
+  const isVideo = picture === "yes";
   const [aspect, setAspect] = useState(16 / 9);
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(0);
@@ -43,7 +49,7 @@ export function FileStage({ params, active }: { params: EchoParams; active: bool
 
   // pause when the user switches to the YouTube tab
   useEffect(() => {
-    if (!active) mediaRef.current?.pause();
+    if (!active) audioRef.current?.pause();
   }, [active]);
 
   // release the object URL when the file changes
@@ -58,7 +64,7 @@ export function FileStage({ params, active }: { params: EchoParams; active: bool
         setError("Ce fichier n'est ni un audio ni une vidéo.");
         return;
       }
-      const el = mediaRef.current;
+      const el = audioRef.current;
       if (!el) return;
       setError(null);
       let e = engine;
@@ -72,34 +78,95 @@ export function FileStage({ params, active }: { params: EchoParams; active: bool
       setPlaying(false);
       setTime(0);
       setDuration(0);
-      setIsVideo(false);
+      setPicture("probe");
       setFile({ url: URL.createObjectURL(f), name: f.name });
     },
     [engine],
   );
 
-  const toggle = useCallback(async () => {
-    const el = mediaRef.current;
+  const play = useCallback(async () => {
+    const el = audioRef.current;
     if (!el || !file) return;
-    if (el.paused) {
-      await engine?.resume();
-      try {
-        await el.play();
-      } catch {
-        setError("Lecture impossible : format non supporté par ce navigateur.");
-      }
-    } else {
-      el.pause();
+    await engine?.resume();
+    try {
+      await el.play();
+    } catch {
+      setError("Lecture impossible : format non supporté par ce navigateur.");
     }
   }, [engine, file]);
 
+  const seek = useCallback((t: number) => {
+    const a = audioRef.current;
+    if (!a) return;
+    const target = clamp(t, 0, a.duration || 0);
+    a.currentTime = target;
+    if (videoRef.current) videoRef.current.currentTime = target;
+    setTime(target);
+  }, []);
+
+  const toggle = useCallback(() => {
+    const el = audioRef.current;
+    if (!el || !file) return;
+    if (el.paused) void play();
+    else el.pause();
+  }, [file, play]);
+
   usePlayPauseShortcut(toggle, active);
 
-  // Delayed copies of the picture: keep a short history of frames indexed by
-  // media time, and show each copy the frame from `i × delay` earlier.
+  // Lock-screen / notification controls.
   useEffect(() => {
-    const v = mediaRef.current;
-    if (!v || !isVideo || !active) return;
+    if (!file || !active || !("mediaSession" in navigator)) return;
+    const ms = navigator.mediaSession;
+    try {
+      ms.metadata = new MediaMetadata({ title: file.name.replace(/\.[^.]+$/, ""), artist: "EchoChamber" });
+    } catch {}
+    const handlers: [MediaSessionAction, MediaSessionActionHandler][] = [
+      ["play", () => void play()],
+      ["pause", () => audioRef.current?.pause()],
+      ["seekto", (d) => d.seekTime != null && seek(d.seekTime)],
+      ["seekbackward", (d) => seek((audioRef.current?.currentTime ?? 0) - (d.seekOffset || 10))],
+      ["seekforward", (d) => seek((audioRef.current?.currentTime ?? 0) + (d.seekOffset || 10))],
+    ];
+    handlers.forEach(([a, h]) => {
+      try {
+        ms.setActionHandler(a, h);
+      } catch {}
+    });
+    return () => {
+      handlers.forEach(([a]) => {
+        try {
+          ms.setActionHandler(a, null);
+        } catch {}
+      });
+    };
+  }, [file, active, play, seek]);
+
+  const updateSession = (a: HTMLAudioElement) => {
+    if (!("mediaSession" in navigator)) return;
+    navigator.mediaSession.playbackState = a.paused ? "paused" : "playing";
+    if (Number.isFinite(a.duration) && a.duration > 0) {
+      try {
+        navigator.mediaSession.setPositionState({ duration: a.duration, position: Math.min(a.currentTime, a.duration), playbackRate: 1 });
+      } catch {}
+    }
+  };
+
+  // Coming back to the page: wake the audio graph up if the OS suspended it.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && audioRef.current && !audioRef.current.paused) void engine?.resume();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [engine]);
+
+  // Picture: the muted video follows the audio, and the delayed copies are drawn
+  // from a short history of frames indexed by media time (copy i shows the frame
+  // from i × delay earlier). Only runs while the page is visible (rAF).
+  useEffect(() => {
+    const v = videoRef.current;
+    const a = audioRef.current;
+    if (!v || !a || !isVideo || !active) return;
 
     const fh = Math.round(FRAME_WIDTH / aspect);
     const frames: { t: number; c: HTMLCanvasElement }[] = [];
@@ -126,13 +193,20 @@ export function FileStage({ params, active }: { params: EchoParams; active: bool
       return best >= 0 ? frames[best] : null;
     };
 
+    const follow = () => {
+      if (!a.paused && v.paused && !v.ended) v.play().catch(() => {});
+      else if (a.paused && !v.paused) v.pause();
+      if (!v.seeking && v.readyState >= 1 && Math.abs(v.currentTime - a.currentTime) > 0.2) v.currentTime = a.currentTime;
+    };
+
     const loop = () => {
       raf = requestAnimationFrame(loop);
+      follow();
       if (v.readyState < 2) return;
       const p = paramsRef.current;
       const t = v.currentTime;
       if (lastT >= 0 && (t < lastT - 0.05 || t > lastT + 1)) {
-        // seek: the history no longer matches
+        // seek (or back from the background): the history no longer matches
         pool.push(...frames.map((f) => f.c));
         frames.length = 0;
       }
@@ -164,29 +238,27 @@ export function FileStage({ params, active }: { params: EchoParams; active: bool
       }
     };
     loop();
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(raf);
+      v.pause();
+    };
   }, [isVideo, aspect, active, file]);
 
   const media = (
     <video
-      ref={mediaRef}
-      src={file?.url}
+      ref={videoRef}
+      src={file && picture !== "no" ? file.url : undefined}
+      muted
       playsInline
       preload="auto"
       className={cn("h-full w-full object-contain", !isVideo && "hidden")}
       onLoadedMetadata={(e) => {
         const v = e.currentTarget;
-        setDuration(v.duration || 0);
         const hasPicture = v.videoWidth > 0 && v.videoHeight > 0;
-        setIsVideo(hasPicture);
+        setPicture(hasPicture ? "yes" : "no");
         if (hasPicture) setAspect(v.videoWidth / v.videoHeight);
       }}
-      onDurationChange={(e) => setDuration(e.currentTarget.duration || 0)}
-      onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
-      onPlay={() => setPlaying(true)}
-      onPause={() => setPlaying(false)}
-      onEnded={() => setPlaying(false)}
-      onError={() => file && setError("Impossible de lire ce fichier dans ce navigateur.")}
+      onError={() => setPicture("no")}
       onClick={toggle}
     />
   );
@@ -216,6 +288,28 @@ export function FileStage({ params, active }: { params: EchoParams; active: bool
           open(e.target.files?.[0]);
           e.target.value = "";
         }}
+      />
+      <audio
+        ref={audioRef}
+        src={file?.url}
+        preload="auto"
+        className="hidden"
+        onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
+        onDurationChange={(e) => setDuration(e.currentTarget.duration || 0)}
+        onTimeUpdate={(e) => {
+          setTime(e.currentTarget.currentTime);
+          updateSession(e.currentTarget);
+        }}
+        onPlay={(e) => {
+          setPlaying(true);
+          updateSession(e.currentTarget);
+        }}
+        onPause={(e) => {
+          setPlaying(false);
+          updateSession(e.currentTarget);
+        }}
+        onEnded={() => setPlaying(false)}
+        onError={() => file && setError("Impossible de lire ce fichier dans ce navigateur.")}
       />
 
       {file && (
@@ -286,10 +380,7 @@ export function FileStage({ params, active }: { params: EchoParams; active: bool
         duration={duration}
         disabled={!file}
         onToggle={toggle}
-        onSeek={(t) => {
-          if (mediaRef.current) mediaRef.current.currentTime = t;
-          setTime(t);
-        }}
+        onSeek={seek}
       />
     </div>
   );
