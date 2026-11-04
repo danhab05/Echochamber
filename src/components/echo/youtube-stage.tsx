@@ -9,7 +9,7 @@ import { Tile, gridColumns } from "./tile";
 import { Transport } from "./transport";
 import { usePlayPauseShortcut } from "./use-shortcut";
 
-const DEFAULT_URL = "https://www.youtube.com/watch?v=2zNSgSzhBfM";
+const DEFAULT_URL = "https://youtu.be/Cr8K88UcO0s";
 const STORAGE_KEY = "echochamber:youtube-url";
 
 export function YouTubeStage({ params }: { params: EchoParams }) {
